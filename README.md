@@ -9,3 +9,10 @@ pip -r requirements
 py Game.py
 ```
 
+Screenshots:
+
+![Screenshot](screenshots/avg.png)
+
+![Screenshot](screenshots/fj.png)
+
+![Screenshot](screenshots/tr.png)
