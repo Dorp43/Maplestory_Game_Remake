@@ -1,17 +1,17 @@
 import pygame
 import os
 import random
-from HealthBar import HealthBar
+from entities.HealthBar import HealthBar
 
 
 FLOOR = 465
 
 class Mob(pygame.sprite.Sprite):
-    def __init__(self,screen, char_type, x, y, scale, speed, health, players):
+    def __init__(self,screen, players, mob_name, x, y, scale=1, speed=1, health=150):
         pygame.sprite.Sprite.__init__(self)
         self.screen = screen
         self.alive = True
-        self.char_type = char_type
+        self.mob_name = mob_name
         self.speed = speed
         self.players = players
         self.direction = -1
@@ -51,9 +51,9 @@ class Mob(pygame.sprite.Sprite):
             #reset temporary list of images
             temp_list = []
             #count number of files in the folder
-            num_of_frames = len(os.listdir(f'sprites/mobs/{self.char_type}/{animation}'))
+            num_of_frames = len(os.listdir(f'sprites/mobs/{self.mob_name}/{animation}'))
             for i in range(num_of_frames):
-                img = pygame.image.load(f'sprites/mobs/{self.char_type}/{animation}/{i}.png')
+                img = pygame.image.load(f'sprites/mobs/{self.mob_name}/{animation}/{i}.png')
                 img = pygame.transform.scale(img, (int(img.get_width() * scale), int(img.get_height() * scale)))
                 temp_list.append(img)
             self.animation_list.append(temp_list)
@@ -72,23 +72,26 @@ class Mob(pygame.sprite.Sprite):
         self.handle_movement()
     
     def handle_movement(self):
-        self.attack()
         if self.alive and not self.is_hit and not self.has_attacker:
             self.move(self.GRAVITY)
             if self.randomMovement:
                 if self.moveRange <= 0:
 
-                    # 30% for mob to be idle after finishing its route
-                    # if random.random() < 0.3 and not self.has_attacker:
-                    #     self.is_idle = True
-                    #     self.update_action(0)
-                    #     self.moving_left = False
-                    #     self.moving_right = False
-                    #     print("Now idle")
+                    # 40% for mob to be idle after finishing its 
+                    if random.random() < 0.4 and not self.has_attacker:
+                        self.is_idle = True
+                        self.update_action(0)
+                        self.moving_left = False
+                        self.moving_right = False
+                        if self.is_idle and self.idle_cooldown <= 200:
+                            self.idle_cooldown += 1
+                        elif self.idle_cooldown >= 200:
+                            self.idle_cooldown = 0
+                            self.is_idle = False
+
 
                     # If mob is not idle calculate a new route
                     if not self.is_idle:
-                        print("test")
                         self.moveRange = random.randint(100, 500)
                         if self.moving_left:
                             self.moving_left = False
@@ -97,16 +100,19 @@ class Mob(pygame.sprite.Sprite):
                             self.moving_right = False
                             self.moving_left = True
                         else:
+                            # If there is no direction defined than define one.
                             if random.random() < 0.5:
                                 self.moving_left = True
                             else:
                                 self.moving_right = True
                         self.update_action(1)
-                    else:
-                        self.update_action(1)
-                        self.moveRange -= 1
+                        # If range is not 0 keep sub from the range
+                else:
+                    self.update_action(1)
+                    self.moveRange -= 1
+            # Checks if a player gets nearby in radius of 125 so it can chase him
             for player in self.players:
-                #Radius set to 200   
+                #Radius set to 125   
                 if pygame.sprite.collide_circle(self, player):
                     self.follow_player(player)
                 else: 
@@ -117,7 +123,7 @@ class Mob(pygame.sprite.Sprite):
 
 
     def follow_player(self, player):
-        print("Now following a character")
+        self.attack()
         self.randomMovement = False
         #If player in the right
         if player.rect.x >= self.rect.x:
@@ -236,10 +242,9 @@ class Mob(pygame.sprite.Sprite):
 
     
     def attack(self):
-        if self.alive:
-            for player in self.players:  
-                if pygame.sprite.collide_mask(self, player):
-                        player.hit(5)
+        for player in self.players:  
+            if pygame.sprite.collide_mask(self, player):
+                    player.hit(5)
                     
 
 

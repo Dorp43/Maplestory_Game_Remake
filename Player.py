@@ -1,9 +1,9 @@
 import pygame
 import random
 import os
-from Skill import Skill
-from Projectile import Projectile
-from HealthBar import HealthBar
+from skills.Skill import Skill
+from skills.Projectile import Projectile
+from entities.HealthBar import HealthBar
 
 FLOOR = 465
 

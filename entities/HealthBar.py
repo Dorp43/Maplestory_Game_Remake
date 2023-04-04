@@ -1,5 +1,4 @@
 import pygame
-import os
 
 class HealthBar(pygame.sprite.Sprite):
     def __init__(self, object, screen, color):
