@@ -3,7 +3,6 @@ import os
 import random
 from entities.HealthBar import HealthBar
 
-
 FLOOR = 465
 
 class Mob(pygame.sprite.Sprite):
@@ -47,15 +46,24 @@ class Mob(pygame.sprite.Sprite):
         
         #load all images for the players
         animation_types = ['stand', 'walk', 'jump', 'hit', 'die']
+
         for animation in animation_types:
-            #reset temporary list of images
             temp_list = []
-            #count number of files in the folder
-            num_of_frames = len(os.listdir(f'sprites/mobs/{self.mob_name}/{animation}'))
+            anim_path = f'sprites/mobs/{self.mob_name}/{animation}'
+
+            # If the folder doesn't exist, use the first animation (stand) as fallback
+            if not os.path.exists(anim_path):
+                print(f"[WARNING] Missing animation '{animation}' for mob '{self.mob_name}'. Using fallback.")
+                temp_list = self.animation_list[0] if self.animation_list else []
+                self.animation_list.append(temp_list)
+                continue
+
+            num_of_frames = len(os.listdir(anim_path))
             for i in range(num_of_frames):
-                img = pygame.image.load(f'sprites/mobs/{self.mob_name}/{animation}/{i}.png')
+                img = pygame.image.load(f'{anim_path}/{i}.png')
                 img = pygame.transform.scale(img, (int(img.get_width() * scale), int(img.get_height() * scale)))
                 temp_list.append(img)
+
             self.animation_list.append(temp_list)
 
         self.image = self.animation_list[self.action][self.frame_index]
