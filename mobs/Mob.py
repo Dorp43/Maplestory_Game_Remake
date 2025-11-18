@@ -7,7 +7,7 @@ FLOOR = 465
 
 
 class Mob(pygame.sprite.Sprite):
-    def __init__(self, screen, players, tiles, mob_name, x, y, scale=1, speed=1, health=150):
+    def __init__(self, screen, players, tiles, mob_name, x, y, scale=1, speed=1, health=150, map_bounds=None):
         pygame.sprite.Sprite.__init__(self)
         self.screen = screen
         self.alive = True
@@ -16,6 +16,8 @@ class Mob(pygame.sprite.Sprite):
         self.players = players
         # list of pygame.Rect for solid tiles / platforms
         self.tiles = tiles
+        # Map boundaries: (min_x, max_x, min_y, max_y) - None means no boundaries
+        self.map_bounds = map_bounds
         self.direction = -1
         self.max_health = health
         self.health = health
@@ -219,10 +221,23 @@ class Mob(pygame.sprite.Sprite):
                     self.rect.top = tile.bottom
                     self.vel_y = 0
 
-        screen_floor = self.screen.get_height()
-        if self.rect.bottom > screen_floor:
-            self.rect.bottom = screen_floor
-            self.in_air = False
+        # Clamp mob to map boundaries if provided
+        if self.map_bounds:
+            map_min_x, map_max_x, map_min_y, map_max_y = self.map_bounds
+            # Horizontal boundaries
+            if self.rect.left < map_min_x:
+                self.rect.left = map_min_x
+                self.moving_left = False
+                self.moving_right = True
+            if self.rect.right > map_max_x:
+                self.rect.right = map_max_x
+                self.moving_right = False
+                self.moving_left = True
+            # Vertical boundaries (only clamp bottom, allow going above map top)
+            if self.rect.bottom > map_max_y:
+                self.rect.bottom = map_max_y
+                self.vel_y = 0
+                self.in_air = False
 
 
     def update_animation(self):

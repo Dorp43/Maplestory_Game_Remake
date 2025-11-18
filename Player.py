@@ -7,7 +7,7 @@ from entities.HealthBar import HealthBar
 
 
 class Player(pygame.sprite.Sprite):
-    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles):
+    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles, map_bounds=None):
         pygame.sprite.Sprite.__init__(self)
         self.alive = True
         self.screen = screen
@@ -21,6 +21,8 @@ class Player(pygame.sprite.Sprite):
         self.mobs = mobs
         # list of pygame.Rect for solid tiles / platforms
         self.tiles = tiles
+        # Map boundaries: (min_x, max_x, min_y, max_y) - None means no boundaries
+        self.map_bounds = map_bounds
         self.projectiles_group = pygame.sprite.Group()
         self.skills_group = pygame.sprite.Group()
         # Booleans
@@ -140,12 +142,19 @@ class Player(pygame.sprite.Sprite):
                     self.rect.top = tile.bottom
                     self.vel_y = 0
 
-        # fallback: keep player within screen bounds
-        screen_floor = self.screen.get_height()
-        if self.rect.bottom > screen_floor:
-            self.rect.bottom = screen_floor
-            self.vel_y = 0
-            self.in_air = False
+        # Clamp player to map boundaries if provided
+        if self.map_bounds:
+            map_min_x, map_max_x, map_min_y, map_max_y = self.map_bounds
+            # Horizontal boundaries
+            if self.rect.left < map_min_x:
+                self.rect.left = map_min_x
+            if self.rect.right > map_max_x:
+                self.rect.right = map_max_x
+            # Vertical boundaries (only clamp bottom, allow going above map top)
+            if self.rect.bottom > map_max_y:
+                self.rect.bottom = map_max_y
+                self.vel_y = 0
+                self.in_air = False
 
 
     def shoot(self, projectile, isRotate, damage, hit_count):

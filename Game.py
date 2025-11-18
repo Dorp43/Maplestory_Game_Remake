@@ -166,6 +166,8 @@ class Game:
         """ Sets bg variable to the current map """
         self.map = Map(self.screen, self.players, self.map_id)
         self.mobs = self.map.get_mobs()
+        # Get map boundaries to pass to player
+        map_bounds = self.map.get_map_bounds()
         # Spawn Player (Would move to Map class on next update)
         player = Player(
             self.screen,
@@ -177,6 +179,7 @@ class Game:
             200,
             self.mobs,
             self.map.tiles,
+            map_bounds=map_bounds,
         )
         self.players.add(player)
         # Initialize camera to player's starting position

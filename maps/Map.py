@@ -295,9 +295,10 @@ class Map:
 
     def set_mobs(self, mobs_list):
         """Spawn the mobs on map."""
+        map_bounds = self.get_map_bounds()
         for mob in mobs_list:
             print(f"[Map] Spawning mob -> name={mob.get('mob_name')} x={mob.get('x')} y={mob.get('y')} health={mob.get('health')}")
-            self.mobs.add(Mob(self.screen, self.players, self.tiles, **mob))
+            self.mobs.add(Mob(self.screen, self.players, self.tiles, map_bounds=map_bounds, **mob))
 
     def get_mobs(self):
         """Returns mobs list."""
