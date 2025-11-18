@@ -19,6 +19,9 @@ Highlights
 - Viewport can scroll (arrow keys / WASD) so the map can be wider than the window
 - Palette on the right lists every tile (scroll with mouse-wheel)
 - Toggle between tile editing and mob placement with TAB
+- Tiles now rendered at ORIGINAL PIXEL SIZE (no scaling/stretch), DYNAMICALLY ALIGNED in cells
+  based on content (top-heavy -> top-align, bottom-heavy -> bottom-align, balanced -> center)
+  for perfect island/cliff/ground fitting without distortion, CLIPPED if larger than cell.
 """
 
 
@@ -39,6 +42,9 @@ GRID_COLS = 80
 GRID_ROWS = 20
 CAMERA_SPEED = 20
 PALETTE_ENTRY_HEIGHT = TILE_HEIGHT + 16
+
+PREVIEW_WIDTH = TILE_WIDTH // 2
+PREVIEW_HEIGHT = TILE_HEIGHT // 2
 
 # Mob defaults
 MOB_DEFAULT_HEALTH = {
@@ -93,11 +99,54 @@ def load_tile_images(base_dir: str, tile_entries):
             print(f"[map_editor] Missing tile sprite for id={tile_id}: {full_path}")
             continue
         try:
-            img = pygame.image.load(full_path).convert_alpha()
+            img_orig = pygame.image.load(full_path).convert_alpha()
         except pygame.error:
             continue
-        img = pygame.transform.scale(img, (TILE_WIDTH, TILE_HEIGHT))
-        cache[tile_id] = img
+
+        ow, oh = img_orig.get_size()
+        if ow == 0 or oh == 0:
+            continue
+
+        # Compute dynamic vertical alignment based on opacity distribution
+        mask = pygame.mask.from_surface(img_orig)
+        half_h = oh // 2
+        top_surf = pygame.Surface((ow, half_h), pygame.SRCALPHA)
+        top_surf.blit(img_orig, (0, 0), (0, 0, ow, half_h))
+        top_mask = pygame.mask.from_surface(top_surf)
+        top_count = top_mask.count()
+
+        bottom_h = oh - half_h
+        bottom_surf = pygame.Surface((ow, bottom_h), pygame.SRCALPHA)
+        bottom_surf.blit(img_orig, (0, 0), (0, half_h, ow, bottom_h))
+        bottom_mask = pygame.mask.from_surface(bottom_surf)
+        bottom_count = bottom_mask.count()
+
+        if top_count > bottom_count:
+            grid_oy = 0  # Top-align (e.g., for top-heavy grass/upper cliffs)
+        elif bottom_count > top_count:
+            grid_oy = TILE_HEIGHT - oh  # Bottom-align (e.g., for ground/dirt bases)
+        else:
+            grid_oy = (TILE_HEIGHT - oh) // 2  # Center-align for balanced
+
+        # Horizontal always center
+        grid_ox = (TILE_WIDTH - ow) // 2
+
+        # For PALETTE PREVIEW: Proportional CONTAIN scale (min ratio), center
+        scale_prev = min(PREVIEW_WIDTH / ow, PREVIEW_HEIGHT / oh)
+        pw = int(ow * scale_prev)
+        ph = int(oh * scale_prev)
+        preview_img = pygame.transform.scale(img_orig, (pw, ph))  # Bilinear for small previews
+        prev_ox = (PREVIEW_WIDTH - pw) // 2
+        prev_oy = (PREVIEW_HEIGHT - ph) // 2
+
+        cache[tile_id] = {
+            'img': img_orig,
+            'grid_ox': grid_ox,
+            'grid_oy': grid_oy,
+            'preview_img': preview_img,
+            'preview_ox': prev_ox,
+            'preview_oy': prev_oy,
+        }
     return cache
 
 
@@ -353,12 +402,15 @@ def main():
                 tile_id = grid[row][col]
                 if tile_id == 0:
                     continue
-                img = tile_images.get(tile_id)
-                if img is None:
+                img_data = tile_images.get(tile_id)
+                if img_data is None:
                     continue
                 screen_x = col * TILE_WIDTH - camera_x
                 screen_y = row * TILE_HEIGHT - camera_y
-                screen.blit(img, (screen_x, screen_y))
+                # Blit original with dynamic offset, clip to cell (handles overflow/negative oy)
+                cell_surf = pygame.Surface((TILE_WIDTH, TILE_HEIGHT), pygame.SRCALPHA)
+                cell_surf.blit(img_data['img'], (img_data['grid_ox'], img_data['grid_oy']))
+                screen.blit(cell_surf, (screen_x, screen_y))
 
         # grid lines
         for col in range(start_col, end_col + 1):
@@ -368,7 +420,7 @@ def main():
             y = row * TILE_HEIGHT - camera_y
             pygame.draw.line(screen, GRID_COLOR, (0, y), (viewport_width, y), 1)
 
-        # tile highlight
+        # tile highlight (full cell)
         if viewport_rect.collidepoint(mouse_x, mouse_y):
             world_x = camera_x + mouse_x
             world_y = camera_y + mouse_y
@@ -415,14 +467,16 @@ def main():
             if tile_id == selected_tile_id:
                 pygame.draw.rect(screen, (255, 255, 255), rect, width=2, border_radius=6)
 
-            img = tile_images.get(tile_id)
-            if img:
-                preview = pygame.transform.scale(img, (TILE_WIDTH // 2, TILE_HEIGHT // 2))
-                screen.blit(preview, (rect.x + 8, rect.y + 6))
+            img_data = tile_images.get(tile_id)
+            if img_data:
+                preview_pos_x = rect.x + 8 + img_data['preview_ox']
+                preview_pos_y = rect.y + 6 + img_data['preview_oy']
+                # Blit scaled preview, centered
+                screen.blit(img_data['preview_img'], (preview_pos_x, preview_pos_y))
 
             label = f"ID {tile_id}: {entry['label']}"
             text = font.render(label, True, PALETTE_TEXT)
-            screen.blit(text, (rect.x + TILE_WIDTH // 2 + 16, rect.y + 10))
+            screen.blit(text, (rect.x + PREVIEW_WIDTH + 16, rect.y + 10))
 
             y_offset += PALETTE_ENTRY_HEIGHT
 

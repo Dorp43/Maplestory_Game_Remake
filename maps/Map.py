@@ -114,10 +114,41 @@ class Map:
             if not os.path.exists(sprite_path):
                 print(f"[Map] WARNING: missing sprite for tile id {tile_id}: {sprite_path}")
                 continue
-            image = pygame.image.load(sprite_path).convert_alpha()
-            if image.get_width() != TILE_WIDTH or image.get_height() != TILE_HEIGHT:
-                image = pygame.transform.scale(image, (TILE_WIDTH, TILE_HEIGHT))
-            cache[tile_id] = image
+            img_orig = pygame.image.load(sprite_path).convert_alpha()
+
+            ow, oh = img_orig.get_size()
+            if ow == 0 or oh == 0:
+                continue
+
+            # Compute dynamic vertical alignment based on opacity distribution
+            mask = pygame.mask.from_surface(img_orig)
+            half_h = oh // 2
+            top_surf = pygame.Surface((ow, half_h), pygame.SRCALPHA)
+            top_surf.blit(img_orig, (0, 0), (0, 0, ow, half_h))
+            top_mask = pygame.mask.from_surface(top_surf)
+            top_count = top_mask.count()
+
+            bottom_h = oh - half_h
+            bottom_surf = pygame.Surface((ow, bottom_h), pygame.SRCALPHA)
+            bottom_surf.blit(img_orig, (0, 0), (0, half_h, ow, bottom_h))
+            bottom_mask = pygame.mask.from_surface(bottom_surf)
+            bottom_count = bottom_mask.count()
+
+            if top_count > bottom_count:
+                grid_oy = 0  # Top-align (e.g., for top-heavy grass/upper cliffs)
+            elif bottom_count > top_count:
+                grid_oy = TILE_HEIGHT - oh  # Bottom-align (e.g., for ground/dirt bases)
+            else:
+                grid_oy = (TILE_HEIGHT - oh) // 2  # Center-align for balanced
+
+            # Horizontal always center
+            grid_ox = (TILE_WIDTH - ow) // 2
+
+            cache[tile_id] = {
+                'img': img_orig,
+                'grid_ox': grid_ox,
+                'grid_oy': grid_oy,
+            }
         return cache
 
     def draw(self, surface):
@@ -126,9 +157,14 @@ class Map:
             return
         for y, row in enumerate(self.tile_grid):
             for x, tile_id in enumerate(row):
-                image = self.tile_images.get(tile_id)
-                if image:
-                    surface.blit(image, (x * TILE_WIDTH, y * TILE_HEIGHT))
+                img_data = self.tile_images.get(tile_id)
+                if img_data:
+                    screen_x = x * TILE_WIDTH
+                    screen_y = y * TILE_HEIGHT
+                    # Blit original with dynamic offset, clip to cell (handles overflow/negative oy)
+                    cell_surf = pygame.Surface((TILE_WIDTH, TILE_HEIGHT), pygame.SRCALPHA)
+                    cell_surf.blit(img_data['img'], (img_data['grid_ox'], img_data['grid_oy']))
+                    surface.blit(cell_surf, (screen_x, screen_y))
 
     def load_mobs_from_csv(self, map_id: int):
         """
@@ -183,8 +219,3 @@ class Map:
     def get_mobs(self):
         """Returns mobs list."""
         return self.mobs
-
-            
-
-        
-        
