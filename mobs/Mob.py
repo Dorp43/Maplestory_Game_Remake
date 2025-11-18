@@ -219,6 +219,11 @@ class Mob(pygame.sprite.Sprite):
                     self.rect.top = tile.bottom
                     self.vel_y = 0
 
+        screen_floor = self.screen.get_height()
+        if self.rect.bottom > screen_floor:
+            self.rect.bottom = screen_floor
+            self.in_air = False
+
 
     def update_animation(self):
         #update animation

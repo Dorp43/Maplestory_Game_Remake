@@ -5,7 +5,7 @@ from maps.Map import Map
 
 
 class Game:
-    def __init__(self, width=800, height=600, fps=60, map_id=0):
+    def __init__(self, width=0, height=0, fps=60, map_id=0):
         pygame.init()
         self.run = True
         self.map_id = map_id
@@ -22,8 +22,14 @@ class Game:
 
     def initialize_game(self):
         """ Initializes general settings """
+        display_info = pygame.display.Info()
+        # If width/height were not provided, use current display resolution.
+        if self.screen_width <= 0 or self.screen_height <= 0:
+            self.screen_width = display_info.current_w
+            self.screen_height = display_info.current_h
+
         self.screen = pygame.display.set_mode(
-            (self.screen_width, self.screen_height))
+            (self.screen_width, self.screen_height), pygame.FULLSCREEN)
         self.clock = pygame.time.Clock()
         pygame.mouse.set_visible(False)  # hide the cursor
         self.cursor = pygame.image.load(
@@ -113,7 +119,6 @@ class Game:
 
     def load_map(self, map_id: int):
         """ Sets bg variable to the current map """
-        self.bg = pygame.image.load(f"sprites/maps/{map_id}.png")
         self.map = Map(self.screen, self.players, self.map_id)
         self.mobs = self.map.get_mobs()
         # Spawn Player (Would move to Map class on next update)
@@ -132,7 +137,9 @@ class Game:
         )
 
     def draw_bg(self):
-        self.screen.blit(self.bg, (0, 0))
+        self.screen.fill((255, 255, 255))
+        if self.map:
+            self.map.draw(self.screen)
 
 
 game = Game()

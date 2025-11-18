@@ -5,8 +5,6 @@ from skills.Skill import Skill
 from skills.Projectile import Projectile
 from entities.HealthBar import HealthBar
 
-FLOOR = 465
-
 
 class Player(pygame.sprite.Sprite):
     def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles):
@@ -141,6 +139,13 @@ class Player(pygame.sprite.Sprite):
                 elif self.vel_y < 0:  # jumping up
                     self.rect.top = tile.bottom
                     self.vel_y = 0
+
+        # fallback: keep player within screen bounds
+        screen_floor = self.screen.get_height()
+        if self.rect.bottom > screen_floor:
+            self.rect.bottom = screen_floor
+            self.vel_y = 0
+            self.in_air = False
 
 
     def shoot(self, projectile, isRotate, damage, hit_count):

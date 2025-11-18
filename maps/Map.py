@@ -1,8 +1,12 @@
+import json
 import os
 import csv
 import pygame
 from mobs.Mob import Mob
 from maps import map0
+
+TILE_WIDTH = 90
+TILE_HEIGHT = 60
 
 
 class Map:
@@ -10,8 +14,18 @@ class Map:
         self.screen = screen
         self.players = players
         self.mobs = pygame.sprite.Group()
-        # list of pygame.Rect that represent solid tiles / platforms
         self.tiles = []
+        self.tile_grid = []
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        self.project_root = os.path.dirname(base_dir)
+        self.tile_manifest_path = os.path.join(base_dir, "tile_manifest.json")
+        self.tile_defs = self.load_tile_manifest()
+        self.solid_tile_ids = {
+            tile_id for tile_id, data in self.tile_defs.items()
+            if data.get("solid", True) and tile_id != 0
+        }
+        self.tile_images = self.load_tile_images()
         self.set_map(map_id)
 
     def set_map(self, map_id):
@@ -39,6 +53,7 @@ class Map:
         the CSV's rows/columns.
         """
         self.tiles = []
+        self.tile_grid = []
 
         csv_path = os.path.join(
             os.path.dirname(__file__),
@@ -56,30 +71,64 @@ class Map:
                 # skip empty rows (e.g. trailing newlines)
                 if not row:
                     continue
-                grid.append([int(cell) for cell in row if cell != ""])
+                grid.append([int(cell) if cell else 0 for cell in row])
 
+        self.tile_grid = grid
         if not grid:
             return
 
-        rows = len(grid)
-        cols = len(grid[0])
-
-        screen_w = self.screen.get_width()
-        screen_h = self.screen.get_height()
-
-        tile_w = screen_w // cols
-        tile_h = screen_h // rows
-
         for y, row in enumerate(grid):
             for x, cell in enumerate(row):
-                if cell == 1:
+                if cell in self.solid_tile_ids:
                     rect = pygame.Rect(
-                        x * tile_w,
-                        y * tile_h,
-                        tile_w,
-                        tile_h,
+                        x * TILE_WIDTH,
+                        y * TILE_HEIGHT,
+                        TILE_WIDTH,
+                        TILE_HEIGHT,
                     )
                     self.tiles.append(rect)
+
+    def load_tile_manifest(self):
+        """Load tile definitions (id -> path/solid)."""
+        tile_defs = {
+            0: {"id": 0, "label": "Empty", "path": None, "solid": False}
+        }
+        if os.path.exists(self.tile_manifest_path):
+            with open(self.tile_manifest_path) as f:
+                data = json.load(f)
+                for entry in data.get("tiles", []):
+                    tile_defs[entry["id"]] = entry
+        else:
+            print("[Map] WARNING: tile_manifest.json missing; using default empty tiles only.")
+        return tile_defs
+
+    def load_tile_images(self):
+        """Load pygame surfaces for every tile that has a sprite path."""
+        cache = {}
+        tiles_root = os.path.join(self.project_root, "sprites", "maps", "tile")
+        for tile_id, entry in self.tile_defs.items():
+            path = entry.get("path")
+            if tile_id == 0 or not path:
+                continue
+            sprite_path = os.path.join(tiles_root, path)
+            if not os.path.exists(sprite_path):
+                print(f"[Map] WARNING: missing sprite for tile id {tile_id}: {sprite_path}")
+                continue
+            image = pygame.image.load(sprite_path).convert_alpha()
+            if image.get_width() != TILE_WIDTH or image.get_height() != TILE_HEIGHT:
+                image = pygame.transform.scale(image, (TILE_WIDTH, TILE_HEIGHT))
+            cache[tile_id] = image
+        return cache
+
+    def draw(self, surface):
+        """Render the tile grid onto the provided surface."""
+        if not self.tile_grid:
+            return
+        for y, row in enumerate(self.tile_grid):
+            for x, tile_id in enumerate(row):
+                image = self.tile_images.get(tile_id)
+                if image:
+                    surface.blit(image, (x * TILE_WIDTH, y * TILE_HEIGHT))
 
     def load_mobs_from_csv(self, map_id: int):
         """

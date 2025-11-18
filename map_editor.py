@@ -1,3 +1,5 @@
+import json
+import math
 import os
 import sys
 import csv
@@ -5,62 +7,56 @@ import pygame
 
 
 """
-Simple tile-map editor for your game.
+Scrollable tile + mob editor.
 
 Usage (from project root):
     python map_editor.py [map_id]
 
-Examples:
-    python map_editor.py        # defaults to map 0
-    python map_editor.py 1      # edits map1 background and CSV
-
-Controls:
-    - Left click  : toggle tile (empty <-> solid)
-    - Right click : clear tile (set to empty)
-    - S key       : save CSV to maps/map{map_id}_tiles.csv
-    - ESC / Q     : quit editor
-
-The editor:
-    - Loads sprites/maps/{map_id}.png as background.
-    - Uses a configurable grid (cols/rows) to match your CSV.
-    - Visualizes solid tiles with a semi-transparent overlay.
+Highlights
+----------
+- Paint tiles by selecting any sprite from sprites/maps/tile/*
+- Tile data is stored as numeric IDs defined in maps/tile_manifest.json
+- Viewport can scroll (arrow keys / WASD) so the map can be wider than the window
+- Palette on the right lists every tile (scroll with mouse-wheel)
+- Toggle between tile editing and mob placement with TAB
 """
 
 
-# ------- CONFIGURABLE SETTINGS -------
-# You can tweak these if you want a different grid resolution.
+# ------- CONFIG SETTINGS -------
 DEFAULT_MAP_ID = 0
-GRID_COLS = 16   # number of columns in the CSV
-GRID_ROWS = 12   # number of rows in the CSV
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 720
+PALETTE_WIDTH = 320
+VIEWPORT_BG = (240, 240, 245)
+GRID_COLOR = (205, 205, 205)
+HILIGHT_COLOR = (255, 255, 0, 120)
+PALETTE_BG = (30, 30, 35)
+PALETTE_TEXT = (220, 220, 220)
 
-# Mob default health per type (used when saving/loading mobs)
+TILE_WIDTH = 90
+TILE_HEIGHT = 60
+GRID_COLS = 80
+GRID_ROWS = 20
+CAMERA_SPEED = 20
+PALETTE_ENTRY_HEIGHT = TILE_HEIGHT + 16
+
+# Mob defaults
 MOB_DEFAULT_HEALTH = {
     "slime": 100,
     "stump": 150,
     "mushroom": 200,
 }
 
-# Colors
-GRID_COLOR = (200, 200, 200)
-SOLID_COLOR = (0, 255, 0, 100)  # RGBA for solid tile overlay
-HILIGHT_COLOR = (255, 255, 0, 120)
-MOB_COLOR = (255, 0, 0)         # mob marker color
-
 
 def get_paths(map_id: int):
-    """Return the background image path and CSV path for a given map id."""
+    """Return CSV paths for a given map id."""
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    bg_path = os.path.join(base_dir, "sprites", "maps", f"{map_id}.png")
     tiles_csv_path = os.path.join(base_dir, "maps", f"map{map_id}_tiles.csv")
     mobs_csv_path = os.path.join(base_dir, "maps", f"map{map_id}_mobs.csv")
-    return bg_path, tiles_csv_path, mobs_csv_path
+    return base_dir, tiles_csv_path, mobs_csv_path
 
 
 def discover_mob_types(base_dir: str):
-    """
-    Discover mob types based on folders under sprites/mobs.
-    Returns a sorted list of folder names.
-    """
     mobs_root = os.path.join(base_dir, "sprites", "mobs")
     types = []
     if os.path.exists(mobs_root):
@@ -69,39 +65,43 @@ def discover_mob_types(base_dir: str):
             if os.path.isdir(path):
                 types.append(name)
     types.sort()
-    # Fallback to slime if no folders found
     return types or ["slime"]
 
 
-def load_mob_images(base_dir: str, mob_types, target_height: int):
-    """
-    Load a preview image for each mob type (sprites/mobs/<mob>/stand/0.png),
-    scaled to roughly match the grid cell height.
-    """
-    mob_images = {}
-    for name in mob_types:
-        img_path = os.path.join(base_dir, "sprites", "mobs", name, "stand", "0.png")
-        if not os.path.exists(img_path):
+def load_tile_manifest(base_dir: str):
+    manifest_path = os.path.join(base_dir, "maps", "tile_manifest.json")
+    if not os.path.exists(manifest_path):
+        raise FileNotFoundError("Missing maps/tile_manifest.json. Please create one that maps tile IDs to sprite paths.")
+    with open(manifest_path) as f:
+        data = json.load(f)
+
+    entries = [{"id": 0, "label": "Empty", "path": None, "solid": False}]
+    entries.extend(sorted(data.get("tiles", []), key=lambda e: e["id"]))
+    return entries
+
+
+def load_tile_images(base_dir: str, tile_entries):
+    tile_root = os.path.join(base_dir, "sprites", "maps", "tile")
+    cache = {}
+    for entry in tile_entries:
+        tile_id = entry["id"]
+        path = entry.get("path")
+        if tile_id == 0 or not path:
+            continue
+        full_path = os.path.join(tile_root, path)
+        if not os.path.exists(full_path):
+            print(f"[map_editor] Missing tile sprite for id={tile_id}: {full_path}")
             continue
         try:
-            img = pygame.image.load(img_path).convert_alpha()
+            img = pygame.image.load(full_path).convert_alpha()
         except pygame.error:
             continue
-
-        if img.get_height() > 0 and target_height > 0:
-            scale = target_height / img.get_height()
-            # Slightly larger than a tile so mobs stand out
-            scale *= 1.2
-            new_w = int(img.get_width() * scale)
-            new_h = int(img.get_height() * scale)
-            img = pygame.transform.scale(img, (new_w, new_h))
-
-        mob_images[name] = img
-    return mob_images
+        img = pygame.transform.scale(img, (TILE_WIDTH, TILE_HEIGHT))
+        cache[tile_id] = img
+    return cache
 
 
 def load_or_create_grid(csv_path: str, cols: int, rows: int):
-    """Load a grid from CSV or create an empty grid if it doesn't exist."""
     if os.path.exists(csv_path):
         grid = []
         with open(csv_path, newline="") as f:
@@ -110,15 +110,13 @@ def load_or_create_grid(csv_path: str, cols: int, rows: int):
                 if not row:
                     continue
                 grid.append([int(cell) for cell in row if cell != ""])
-        # If file exists but has different size, normalize it
+
         if grid:
-            # Trim or extend rows
             if len(grid) > rows:
                 grid = grid[:rows]
             else:
                 while len(grid) < rows:
                     grid.append([0] * cols)
-            # Trim or extend columns in each row
             for r in range(rows):
                 if len(grid[r]) > cols:
                     grid[r] = grid[r][:cols]
@@ -126,12 +124,10 @@ def load_or_create_grid(csv_path: str, cols: int, rows: int):
                     grid[r].extend([0] * (cols - len(grid[r])))
             return grid
 
-    # Default: empty grid
     return [[0 for _ in range(cols)] for _ in range(rows)]
 
 
 def save_grid(csv_path: str, grid):
-    """Save the grid to CSV."""
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
@@ -141,14 +137,9 @@ def save_grid(csv_path: str, grid):
 
 
 def load_mobs(csv_path: str):
-    """
-    Load mobs from CSV.
-    CSV format: mob_name,x,y,health
-    """
     mobs = []
     if not os.path.exists(csv_path):
         return mobs
-
     with open(csv_path, newline="") as f:
         reader = csv.reader(f)
         for row in reader:
@@ -167,14 +158,11 @@ def load_mobs(csv_path: str):
                     health = MOB_DEFAULT_HEALTH.get(name, 100)
             else:
                 health = MOB_DEFAULT_HEALTH.get(name, 100)
-            mobs.append(
-                {"mob_name": name, "x": x, "y": y, "health": health}
-            )
+            mobs.append({"mob_name": name, "x": x, "y": y, "health": health})
     return mobs
 
 
 def save_mobs(csv_path: str, mobs):
-    """Save mobs to CSV."""
     os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
@@ -190,8 +178,28 @@ def save_mobs(csv_path: str, mobs):
     print(f"[map_editor] Saved mobs to {csv_path}")
 
 
+def load_mob_images(base_dir: str, mob_types, target_height: int):
+    mob_images = {}
+    for name in mob_types:
+        img_path = os.path.join(base_dir, "sprites", "mobs", name, "stand", "0.png")
+        if not os.path.exists(img_path):
+            continue
+        try:
+            img = pygame.image.load(img_path).convert_alpha()
+        except pygame.error:
+            continue
+        if img.get_height() > 0:
+            scale = target_height / img.get_height()
+            img = pygame.transform.scale(img, (int(img.get_width() * scale), target_height))
+        mob_images[name] = img
+    return mob_images
+
+
+def clamp(value, minimum, maximum):
+    return max(minimum, min(value, maximum))
+
+
 def main():
-    # ---- parse map id from args ----
     if len(sys.argv) > 1:
         try:
             map_id = int(sys.argv[1])
@@ -201,49 +209,56 @@ def main():
     else:
         map_id = DEFAULT_MAP_ID
 
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir, tiles_csv_path, mobs_csv_path = get_paths(map_id)
+    tile_entries = load_tile_manifest(base_dir)
     mob_types = discover_mob_types(base_dir)
-
-    bg_path, tiles_csv_path, mobs_csv_path = get_paths(map_id)
-
-    if not os.path.exists(bg_path):
-        print(f"[map_editor] Background image not found: {bg_path}")
-        return
 
     pygame.init()
     pygame.display.set_caption(f"Map Editor - map{map_id}")
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
 
-    # Load background (need size first, then convert after setting display mode)
-    bg_raw = pygame.image.load(bg_path)
-    screen_width, screen_height = bg_raw.get_width(), bg_raw.get_height()
-    screen = pygame.display.set_mode((screen_width, screen_height))
-    bg_image = bg_raw.convert()
+    viewport_width = WINDOW_WIDTH - PALETTE_WIDTH
+    viewport_rect = pygame.Rect(0, 0, viewport_width, WINDOW_HEIGHT)
+    palette_rect = pygame.Rect(viewport_width, 0, PALETTE_WIDTH, WINDOW_HEIGHT)
 
-    # Grid / tiles
-    tile_w = screen_width // GRID_COLS
-    tile_h = screen_height // GRID_ROWS
-
-    # Load mob preview images after we know tile size
-    mob_images = load_mob_images(base_dir, mob_types, tile_h)
+    tile_images = load_tile_images(base_dir, tile_entries)
+    mob_images = load_mob_images(base_dir, mob_types, TILE_HEIGHT)
 
     grid = load_or_create_grid(tiles_csv_path, GRID_COLS, GRID_ROWS)
     mobs = load_mobs(mobs_csv_path)
 
     clock = pygame.time.Clock()
-    running = True
-
     font = pygame.font.SysFont(None, 20)
 
-    # editor state
-    mode = "tiles"  # or "mobs"
+    camera_x = 0
+    camera_y = 0
+    move_left = move_right = move_up = move_down = False
+
+    palette_scroll = 0
+    selected_tile_id = 0
+    mode = "tiles"
     current_mob_index = 0
 
+    running = True
     while running:
-        clock.tick(60)
+        dt = clock.tick(60)
+
+        # camera movement
+        if move_left:
+            camera_x -= CAMERA_SPEED
+        if move_right:
+            camera_x += CAMERA_SPEED
+        if move_up:
+            camera_y -= CAMERA_SPEED
+        if move_down:
+            camera_y += CAMERA_SPEED
+
+        max_cam_x = max(0, GRID_COLS * TILE_WIDTH - viewport_width)
+        max_cam_y = max(0, GRID_ROWS * TILE_HEIGHT - WINDOW_HEIGHT)
+        camera_x = clamp(camera_x, 0, max_cam_x)
+        camera_y = clamp(camera_y, 0, max_cam_y)
 
         mouse_x, mouse_y = pygame.mouse.get_pos()
-        col = mouse_x // tile_w
-        row = mouse_y // tile_h
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -256,109 +271,173 @@ def main():
                     save_mobs(mobs_csv_path, mobs)
                 elif event.key == pygame.K_TAB:
                     mode = "mobs" if mode == "tiles" else "tiles"
+                elif event.key in (pygame.K_LEFT, pygame.K_a):
+                    move_left = True
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    move_right = True
+                elif event.key in (pygame.K_UP, pygame.K_w):
+                    move_up = True
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    move_down = True
                 elif event.unicode.isdigit():
-                    # select mob type by index (1..N)
                     idx = int(event.unicode) - 1
                     if 0 <= idx < len(mob_types):
                         current_mob_index = idx
+            elif event.type == pygame.KEYUP:
+                if event.key in (pygame.K_LEFT, pygame.K_a):
+                    move_left = False
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    move_right = False
+                elif event.key in (pygame.K_UP, pygame.K_w):
+                    move_up = False
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    move_down = False
+            elif event.type == pygame.MOUSEWHEEL:
+                if palette_rect.collidepoint(mouse_x, mouse_y):
+                    palette_scroll -= event.y * 30
+                    max_scroll = max(0, len(tile_entries) * PALETTE_ENTRY_HEIGHT - WINDOW_HEIGHT + 40)
+                    palette_scroll = clamp(palette_scroll, 0, max_scroll)
             elif event.type == pygame.MOUSEBUTTONDOWN:
-                if mode == "tiles":
+                if palette_rect.collidepoint(event.pos):
+                    local_y = event.pos[1] + palette_scroll
+                    idx = int(local_y // PALETTE_ENTRY_HEIGHT)
+                    if 0 <= idx < len(tile_entries):
+                        selected_tile_id = tile_entries[idx]["id"]
+                elif viewport_rect.collidepoint(event.pos):
+                    world_x = camera_x + event.pos[0]
+                    world_y = camera_y + event.pos[1]
+                    col = int(world_x // TILE_WIDTH)
+                    row = int(world_y // TILE_HEIGHT)
                     if 0 <= col < GRID_COLS and 0 <= row < GRID_ROWS:
-                        if event.button == 1:  # left click -> toggle
-                            grid[row][col] = 0 if grid[row][col] == 1 else 1
-                        elif event.button == 3:  # right click -> clear
-                            grid[row][col] = 0
-                elif mode == "mobs":
-                    if event.button == 1:
-                        # add mob at mouse position
-                            mob_name = mob_types[current_mob_index]
-                            health = MOB_DEFAULT_HEALTH.get(mob_name, 100)
-                            mobs.append(
-                                {"mob_name": mob_name, "x": mouse_x, "y": mouse_y, "health": health}
-                            )
-                    elif event.button == 3:
-                        # remove nearest mob within a small radius
-                        if mobs:
-                            mx, my = mouse_x, mouse_y
-                            closest_idx = None
-                            closest_dist_sq = 20 * 20
-                            for i, mob in enumerate(mobs):
-                                dx = mob["x"] - mx
-                                dy = mob["y"] - my
-                                dist_sq = dx * dx + dy * dy
-                                if dist_sq <= closest_dist_sq:
-                                    closest_dist_sq = dist_sq
-                                    closest_idx = i
-                            if closest_idx is not None:
-                                mobs.pop(closest_idx)
+                        if mode == "tiles":
+                            if event.button == 1:
+                                grid[row][col] = selected_tile_id
+                            elif event.button == 3:
+                                grid[row][col] = 0
+                        elif mode == "mobs":
+                            if event.button == 1:
+                                mob_name = mob_types[current_mob_index]
+                                health = MOB_DEFAULT_HEALTH.get(mob_name, 100)
+                                mobs.append(
+                                    {
+                                        "mob_name": mob_name,
+                                        "x": world_x,
+                                        "y": world_y,
+                                        "health": health,
+                                    }
+                                )
+                            elif event.button == 3 and mobs:
+                                closest_idx = None
+                                closest_dist = 25 ** 2
+                                for i, mob in enumerate(mobs):
+                                    dx = mob["x"] - world_x
+                                    dy = mob["y"] - world_y
+                                    dist = dx * dx + dy * dy
+                                    if dist <= closest_dist:
+                                        closest_dist = dist
+                                        closest_idx = i
+                                if closest_idx is not None:
+                                    mobs.pop(closest_idx)
 
-        # Draw background
-        screen.blit(bg_image, (0, 0))
+        # --- drawing ---
+        screen.fill(VIEWPORT_BG)
 
-        # Semi-transparent surface for tiles
-        overlay = pygame.Surface((tile_w, tile_h), pygame.SRCALPHA)
-        overlay_hilight = pygame.Surface((tile_w, tile_h), pygame.SRCALPHA)
-        overlay.fill(SOLID_COLOR)
-        overlay_hilight.fill(HILIGHT_COLOR)
+        # draw tiles (only visible region)
+        start_col = max(0, int(camera_x // TILE_WIDTH))
+        end_col = min(GRID_COLS, int(math.ceil((camera_x + viewport_width) / TILE_WIDTH)))
+        start_row = max(0, int(camera_y // TILE_HEIGHT))
+        end_row = min(GRID_ROWS, int(math.ceil((camera_y + WINDOW_HEIGHT) / TILE_HEIGHT)))
 
-        # Draw solid tiles
-        for r in range(GRID_ROWS):
-            for c in range(GRID_COLS):
-                x = c * tile_w
-                y = r * tile_h
-                if grid[r][c] == 1:
-                    screen.blit(overlay, (x, y))
+        for row in range(start_row, end_row):
+            for col in range(start_col, end_col):
+                tile_id = grid[row][col]
+                if tile_id == 0:
+                    continue
+                img = tile_images.get(tile_id)
+                if img is None:
+                    continue
+                screen_x = col * TILE_WIDTH - camera_x
+                screen_y = row * TILE_HEIGHT - camera_y
+                screen.blit(img, (screen_x, screen_y))
 
-        # Draw mobs using their stand/0.png preview (fallback: red circle)
+        # grid lines
+        for col in range(start_col, end_col + 1):
+            x = col * TILE_WIDTH - camera_x
+            pygame.draw.line(screen, GRID_COLOR, (x, 0), (x, WINDOW_HEIGHT), 1)
+        for row in range(start_row, end_row + 1):
+            y = row * TILE_HEIGHT - camera_y
+            pygame.draw.line(screen, GRID_COLOR, (0, y), (viewport_width, y), 1)
+
+        # tile highlight
+        if viewport_rect.collidepoint(mouse_x, mouse_y):
+            world_x = camera_x + mouse_x
+            world_y = camera_y + mouse_y
+            highlight_col = int(world_x // TILE_WIDTH)
+            highlight_row = int(world_y // TILE_HEIGHT)
+            if 0 <= highlight_col < GRID_COLS and 0 <= highlight_row < GRID_ROWS:
+                overlay = pygame.Surface((TILE_WIDTH, TILE_HEIGHT), pygame.SRCALPHA)
+                overlay.fill(HILIGHT_COLOR)
+                screen.blit(overlay, (highlight_col * TILE_WIDTH - camera_x, highlight_row * TILE_HEIGHT - camera_y))
+
+        # draw mobs
         for mob in mobs:
-            name = mob.get("mob_name", "slime")
-            img = mob_images.get(name)
-            pos = (int(mob["x"]), int(mob["y"]))
-            if img is not None:
-                rect = img.get_rect(center=pos)
+            img = mob_images.get(mob["mob_name"])
+            screen_x = mob["x"] - camera_x
+            screen_y = mob["y"] - camera_y
+            if img:
+                rect = img.get_rect(center=(screen_x, screen_y))
                 screen.blit(img, rect)
             else:
-                pygame.draw.circle(
-                    screen,
-                    MOB_COLOR,
-                    pos,
-                    8,
-                )
+                pygame.draw.circle(screen, (255, 0, 0), (int(screen_x), int(screen_y)), 10)
 
-        # In mobs mode, show a preview of the current mob at the mouse position
-        if mode == "mobs":
-            preview_name = mob_types[current_mob_index]
-            preview_img = mob_images.get(preview_name)
-            if preview_img is not None:
-                preview = preview_img.copy()
-                preview.set_alpha(180)
-                rect = preview.get_rect(center=(mouse_x, mouse_y))
-                screen.blit(preview, rect)
+        if mode == "mobs" and viewport_rect.collidepoint(mouse_x, mouse_y):
+            preview = mob_images.get(mob_types[current_mob_index])
+            if preview:
+                temp = preview.copy()
+                temp.set_alpha(160)
+                rect = temp.get_rect(center=(mouse_x, mouse_y))
+                screen.blit(temp, rect)
 
-        # Draw hilight under mouse
-        if 0 <= col < GRID_COLS and 0 <= row < GRID_ROWS:
-            screen.blit(overlay_hilight, (col * tile_w, row * tile_h))
+        # palette
+        pygame.draw.rect(screen, PALETTE_BG, palette_rect)
+        y_offset = 10 - palette_scroll
+        for entry in tile_entries:
+            tile_id = entry["id"]
+            rect = pygame.Rect(palette_rect.x + 10, y_offset, PALETTE_WIDTH - 20, PALETTE_ENTRY_HEIGHT - 6)
+            if rect.bottom < 0:
+                y_offset += PALETTE_ENTRY_HEIGHT
+                continue
+            if rect.top > WINDOW_HEIGHT:
+                break
 
-        # Draw grid lines
-        for c in range(GRID_COLS + 1):
-            x = c * tile_w
-            pygame.draw.line(screen, GRID_COLOR, (x, 0), (x, screen_height), 1)
-        for r in range(GRID_ROWS + 1):
-            y = r * tile_h
-            pygame.draw.line(screen, GRID_COLOR, (0, y), (screen_width, y), 1)
+            bg_color = (60, 60, 70) if tile_id != selected_tile_id else (90, 120, 200)
+            pygame.draw.rect(screen, bg_color, rect, border_radius=6)
+            if tile_id == selected_tile_id:
+                pygame.draw.rect(screen, (255, 255, 255), rect, width=2, border_radius=6)
 
-        # Small help text
-        current_mob_name = mob_types[current_mob_index]
+            img = tile_images.get(tile_id)
+            if img:
+                preview = pygame.transform.scale(img, (TILE_WIDTH // 2, TILE_HEIGHT // 2))
+                screen.blit(preview, (rect.x + 8, rect.y + 6))
+
+            label = f"ID {tile_id}: {entry['label']}"
+            text = font.render(label, True, PALETTE_TEXT)
+            screen.blit(text, (rect.x + TILE_WIDTH // 2 + 16, rect.y + 10))
+
+            y_offset += PALETTE_ENTRY_HEIGHT
+
+        # instructions
         info_lines = [
-            f"map{map_id}   mode: {mode}   S: save   ESC/Q: quit   TAB: toggle tiles/mobs",
-            "Tiles mode:   Left click: toggle tile   Right click: clear",
-            f"Mobs mode:    1-3 select mob type (current: {current_mob_name})   Left click: add   Right click: remove",
+            f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs",
+            "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
+            f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
+            "S = save tiles & mobs, ESC/Q = quit",
         ]
-        y_text = 5
+        y = 5
         for line in info_lines:
-            text_surf = font.render(line, True, (255, 255, 255))
-            screen.blit(text_surf, (5, y_text))
-            y_text += text_surf.get_height() + 2
+            text = font.render(line, True, (20, 20, 20))
+            screen.blit(text, (10, y))
+            y += text.get_height() + 2
 
         pygame.display.flip()
 
@@ -367,5 +446,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
