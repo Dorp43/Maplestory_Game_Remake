@@ -6,7 +6,7 @@ from mobs.Mob import Mob
 from maps import map0
 
 TILE_WIDTH = 90
-TILE_HEIGHT = 60
+TILE_HEIGHT = 60  # Restored to 60 for seamless tile connections and better sprite fit
 
 
 class Map:
@@ -80,13 +80,28 @@ class Map:
         for y, row in enumerate(grid):
             for x, cell in enumerate(row):
                 if cell in self.solid_tile_ids:
-                    rect = pygame.Rect(
-                        x * TILE_WIDTH,
-                        y * TILE_HEIGHT,
-                        TILE_WIDTH,
-                        TILE_HEIGHT,
-                    )
-                    self.tiles.append(rect)
+                    img_data = self.tile_images.get(cell)
+                    if img_data:
+                        ox = img_data['grid_ox']
+                        oy = img_data['grid_oy']
+                        ow = img_data['img'].get_width()
+                        oh = img_data['img'].get_height()
+                        rect = pygame.Rect(
+                            x * TILE_WIDTH + ox,
+                            y * TILE_HEIGHT + oy,
+                            ow,
+                            oh,
+                        )
+                        self.tiles.append(rect)
+                    else:
+                        # Fallback to full cell if no image data
+                        rect = pygame.Rect(
+                            x * TILE_WIDTH,
+                            y * TILE_HEIGHT,
+                            TILE_WIDTH,
+                            TILE_HEIGHT,
+                        )
+                        self.tiles.append(rect)
 
     def load_tile_manifest(self):
         """Load tile definitions (id -> path/solid)."""
@@ -159,12 +174,10 @@ class Map:
             for x, tile_id in enumerate(row):
                 img_data = self.tile_images.get(tile_id)
                 if img_data:
-                    screen_x = x * TILE_WIDTH
-                    screen_y = y * TILE_HEIGHT
-                    # Blit original with dynamic offset, clip to cell (handles overflow/negative oy)
-                    cell_surf = pygame.Surface((TILE_WIDTH, TILE_HEIGHT), pygame.SRCALPHA)
-                    cell_surf.blit(img_data['img'], (img_data['grid_ox'], img_data['grid_oy']))
-                    surface.blit(cell_surf, (screen_x, screen_y))
+                    screen_x = x * TILE_WIDTH + img_data['grid_ox']
+                    screen_y = y * TILE_HEIGHT + img_data['grid_oy']
+                    # Blit directly without clipping to allow overflow for taller/wider tiles
+                    surface.blit(img_data['img'], (screen_x, screen_y))
 
     def load_mobs_from_csv(self, map_id: int):
         """

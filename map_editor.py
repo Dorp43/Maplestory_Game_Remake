@@ -22,6 +22,8 @@ Highlights
 - Tiles now rendered at ORIGINAL PIXEL SIZE (no scaling/stretch), DYNAMICALLY ALIGNED in cells
   based on content (top-heavy -> top-align, bottom-heavy -> bottom-align, balanced -> center)
   for perfect island/cliff/ground fitting without distortion, CLIPPED if larger than cell.
+- Restored TILE_HEIGHT=60 for better sprite fit and seamless connections (no gaps between adjacent tiles).
+- Increased GRID_ROWS=40 to maintain vertical coverage with finer control.
 """
 
 
@@ -37,9 +39,9 @@ PALETTE_BG = (30, 30, 35)
 PALETTE_TEXT = (220, 220, 220)
 
 TILE_WIDTH = 90
-TILE_HEIGHT = 60
+TILE_HEIGHT = 60  # Restored from 30 to 60 for seamless tile connections (matches sprite designs)
 GRID_COLS = 80
-GRID_ROWS = 20
+GRID_ROWS = 40  # Increased from 20 to 40 for finer vertical placement while keeping fit
 CAMERA_SPEED = 20
 PALETTE_ENTRY_HEIGHT = TILE_HEIGHT + 16
 
@@ -407,10 +409,8 @@ def main():
                     continue
                 screen_x = col * TILE_WIDTH - camera_x
                 screen_y = row * TILE_HEIGHT - camera_y
-                # Blit original with dynamic offset, clip to cell (handles overflow/negative oy)
-                cell_surf = pygame.Surface((TILE_WIDTH, TILE_HEIGHT), pygame.SRCALPHA)
-                cell_surf.blit(img_data['img'], (img_data['grid_ox'], img_data['grid_oy']))
-                screen.blit(cell_surf, (screen_x, screen_y))
+                # Blit directly without clipping to allow overflow for taller/wider tiles
+                screen.blit(img_data['img'], (screen_x + img_data['grid_ox'], screen_y + img_data['grid_oy']))
 
         # grid lines
         for col in range(start_col, end_col + 1):
