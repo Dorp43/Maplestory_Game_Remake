@@ -7,8 +7,9 @@ from entities.HealthBar import HealthBar
 
 FLOOR = 465
 
+
 class Player(pygame.sprite.Sprite):
-    def __init__(self,screen, char_type, x, y, scale, speed, health, mobs):
+    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles):
         pygame.sprite.Sprite.__init__(self)
         self.alive = True
         self.screen = screen
@@ -20,6 +21,8 @@ class Player(pygame.sprite.Sprite):
         self.max_health = health
         self.health = health
         self.mobs = mobs
+        # list of pygame.Rect for solid tiles / platforms
+        self.tiles = tiles
         self.projectiles_group = pygame.sprite.Group()
         self.skills_group = pygame.sprite.Group()
         # Booleans
@@ -117,14 +120,27 @@ class Player(pygame.sprite.Sprite):
             self.vel_x
         dx += self.vel_x
 
-        #check collision with floor
-        if self.rect.bottom + dy > FLOOR:
-            dy = FLOOR - self.rect.bottom
-            self.in_air = False
-
-        #update rectangle position
+        # --- horizontal movement & collision against tiles ---
         self.rect.x += dx
+        for tile in self.tiles:
+            if self.rect.colliderect(tile):
+                if dx > 0:
+                    self.rect.right = tile.left
+                elif dx < 0:
+                    self.rect.left = tile.right
+
+        # --- vertical movement & collision against tiles ---
         self.rect.y += dy
+        self.in_air = True
+        for tile in self.tiles:
+            if self.rect.colliderect(tile):
+                if self.vel_y > 0:  # falling
+                    self.rect.bottom = tile.top
+                    self.vel_y = 0
+                    self.in_air = False
+                elif self.vel_y < 0:  # jumping up
+                    self.rect.top = tile.bottom
+                    self.vel_y = 0
 
 
     def shoot(self, projectile, isRotate, damage, hit_count):

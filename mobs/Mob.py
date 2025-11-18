@@ -5,14 +5,17 @@ from entities.HealthBar import HealthBar
 
 FLOOR = 465
 
+
 class Mob(pygame.sprite.Sprite):
-    def __init__(self,screen, players, mob_name, x, y, scale=1, speed=1, health=150):
+    def __init__(self, screen, players, tiles, mob_name, x, y, scale=1, speed=1, health=150):
         pygame.sprite.Sprite.__init__(self)
         self.screen = screen
         self.alive = True
         self.mob_name = mob_name
         self.speed = speed
         self.players = players
+        # list of pygame.Rect for solid tiles / platforms
+        self.tiles = tiles
         self.direction = -1
         self.max_health = health
         self.health = health
@@ -34,6 +37,9 @@ class Mob(pygame.sprite.Sprite):
         self.moving_left = True
         self.moving_right = False
         self.randomMovement = True
+        self.spawn_x = x
+        # Patrol radius (how far left/right from spawn the mob is allowed to wander)
+        self.patrol_radius = 150
         self.moveRange = random.randint(100, 500)
         # Cool downs
         self.idle_cooldown = 0
@@ -179,14 +185,39 @@ class Mob(pygame.sprite.Sprite):
             self.vel_x
         dx += self.vel_x
 
-        #check collision with floor
-        if self.rect.bottom + dy > FLOOR:
-            dy = FLOOR - self.rect.bottom
-            self.in_air = False
-
-        #update rectangle position
+        # --- horizontal movement & collision against tiles ---
         self.rect.x += dx
+        for tile in self.tiles:
+            if self.rect.colliderect(tile):
+                if dx > 0:
+                    self.rect.right = tile.left
+                elif dx < 0:
+                    self.rect.left = tile.right
+
+        # Clamp horizontal position within patrol radius
+        min_x = self.spawn_x - self.patrol_radius
+        max_x = self.spawn_x + self.patrol_radius
+        if self.rect.centerx < min_x:
+            self.rect.centerx = min_x
+            self.moving_left = False
+            self.moving_right = True
+        elif self.rect.centerx > max_x:
+            self.rect.centerx = max_x
+            self.moving_right = False
+            self.moving_left = True
+
+        # --- vertical movement & collision against tiles ---
         self.rect.y += dy
+        self.in_air = True
+        for tile in self.tiles:
+            if self.rect.colliderect(tile):
+                if self.vel_y > 0:  # falling
+                    self.rect.bottom = tile.top
+                    self.vel_y = 0
+                    self.in_air = False
+                elif self.vel_y < 0:  # jumping up
+                    self.rect.top = tile.bottom
+                    self.vel_y = 0
 
 
     def update_animation(self):

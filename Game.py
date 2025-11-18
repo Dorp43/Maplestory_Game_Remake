@@ -113,12 +113,23 @@ class Game:
 
     def load_map(self, map_id: int):
         """ Sets bg variable to the current map """
-        self.bg = pygame.image.load(f"sprites/maps/map{map_id}.png")
+        self.bg = pygame.image.load(f"sprites/maps/{map_id}.png")
         self.map = Map(self.screen, self.players, self.map_id)
         self.mobs = self.map.get_mobs()
         # Spawn Player (Would move to Map class on next update)
-        self.players.add(Player(self.screen, 'player',
-                    400, 200, 1, 3, 200, self.mobs))
+        self.players.add(
+            Player(
+                self.screen,
+                'player',
+                400,
+                200,
+                1,
+                3,
+                200,
+                self.mobs,
+                self.map.tiles,
+            )
+        )
 
     def draw_bg(self):
         self.screen.blit(self.bg, (0, 0))
