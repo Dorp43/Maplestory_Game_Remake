@@ -16,6 +16,9 @@ class Game:
         self.fps = fps
         self.screen_width = width
         self.screen_height = height
+        # Camera offset (world position of top-left corner of screen)
+        self.camera_x = 0
+        self.camera_y = 0
         self.initialize_game()
         self.load_map(map_id)
         self.game_loop()
@@ -36,6 +39,16 @@ class Game:
             'sprites/entities/UI/cursor.png').convert_alpha()
         pygame.display.set_caption('Maplestory')
 
+    def update_camera(self, player):
+        """Update camera to follow player, keeping player centered on screen"""
+        # Center camera on player
+        target_x = player.rect.centerx - self.screen_width // 2
+        target_y = player.rect.centery - self.screen_height // 2
+        
+        # Smooth camera movement (optional: can make instant by removing lerp)
+        self.camera_x = target_x
+        self.camera_y = target_y
+
     def game_loop(self):
         """ Game loop main method """
         while self.run:
@@ -43,15 +56,25 @@ class Game:
             self.draw_bg()
 
             for mob in self.mobs:
-                mob.update()
-                mob.draw()
+                mob.update(self.camera_x, self.camera_y)
+                mob.draw(self.camera_x, self.camera_y)
             for player in self.players:
-                player.update()
-                player.draw()
+                # Update camera to follow player (before updating player so health bar uses correct camera)
+                self.update_camera(player)
+                player.update(self.camera_x, self.camera_y)
+                player.draw(self.camera_x, self.camera_y)
                 player.projectiles_group.update(self.mobs, player)
-                player.projectiles_group.draw(self.screen)
+                # Draw projectiles with camera offset
+                for projectile in player.projectiles_group:
+                    screen_x = projectile.rect.x - self.camera_x
+                    screen_y = projectile.rect.y - self.camera_y
+                    self.screen.blit(projectile.image, (screen_x, screen_y))
                 player.skills_group.update(player)
-                player.skills_group.draw(self.screen)
+                # Draw skills with camera offset
+                for skill in player.skills_group:
+                    screen_x = skill.rect.x - self.camera_x
+                    screen_y = skill.rect.y - self.camera_y
+                    self.screen.blit(skill.image, (screen_x, screen_y))
 
                 # update player actions
                 if player.alive:
@@ -122,24 +145,26 @@ class Game:
         self.map = Map(self.screen, self.players, self.map_id)
         self.mobs = self.map.get_mobs()
         # Spawn Player (Would move to Map class on next update)
-        self.players.add(
-            Player(
-                self.screen,
-                'player',
-                400,
-                200,
-                1,
-                3,
-                200,
-                self.mobs,
-                self.map.tiles,
-            )
+        player = Player(
+            self.screen,
+            'player',
+            400,
+            200,
+            1,
+            3,
+            200,
+            self.mobs,
+            self.map.tiles,
         )
+        self.players.add(player)
+        # Initialize camera to player's starting position
+        self.camera_x = player.rect.centerx - self.screen_width // 2
+        self.camera_y = player.rect.centery - self.screen_height // 2
 
     def draw_bg(self):
         self.screen.fill((255, 255, 255))
         if self.map:
-            self.map.draw(self.screen)
+            self.map.draw(self.screen, self.camera_x, self.camera_y)
 
 
 game = Game()

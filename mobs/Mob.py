@@ -79,8 +79,8 @@ class Mob(pygame.sprite.Sprite):
 
 
 
-    def update(self):
-        self.health_bar.update()
+    def update(self, camera_x=0, camera_y=0):
+        self.health_bar.update(camera_x, camera_y)
         self.update_animation()
         self.check_alive()
         self.handle_movement()
@@ -301,8 +301,11 @@ class Mob(pygame.sprite.Sprite):
             self.update_time = pygame.time.get_ticks()
 
 
-    def draw(self):
-        self.screen.blit(pygame.transform.flip(self.image, self.flip, False), self.rect)
+    def draw(self, camera_x=0, camera_y=0):
+        # Calculate screen position relative to camera
+        screen_x = self.rect.x - camera_x
+        screen_y = self.rect.y - camera_y
+        self.screen.blit(pygame.transform.flip(self.image, self.flip, False), (screen_x, screen_y))
 
 
     def play_sound(self, dir_name, sound):

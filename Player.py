@@ -65,8 +65,8 @@ class Player(pygame.sprite.Sprite):
         self.health_bar = HealthBar(self, screen, "green")
 
 
-    def update(self):
-        self.health_bar.update()
+    def update(self, camera_x=0, camera_y=0):
+        self.health_bar.update(camera_x, camera_y)
         self.update_animation()
         self.handle_cooldown()
         self.check_alive()
@@ -266,14 +266,17 @@ class Player(pygame.sprite.Sprite):
             else:
                 self.hit_cooldown += 1
 
-    def draw(self):
+    def draw(self, camera_x=0, camera_y=0):
+        # Calculate screen position relative to camera
+        screen_x = self.rect.x - camera_x
+        screen_y = self.rect.y - camera_y
         if self.is_hit:
             if self.hit_cooldown%5:
                 copy_of_image = self.image.copy()
                 copy_of_image.fill((115, 115, 115, 240), special_flags=pygame.BLEND_RGBA_MULT)
-                self.screen.blit(pygame.transform.flip(copy_of_image, self.flip, False), self.rect)
+                self.screen.blit(pygame.transform.flip(copy_of_image, self.flip, False), (screen_x, screen_y))
         else:
-                self.screen.blit(pygame.transform.flip(self.image, self.flip, False), self.rect)
+                self.screen.blit(pygame.transform.flip(self.image, self.flip, False), (screen_x, screen_y))
  
 
 

@@ -182,18 +182,24 @@ class Map:
             }
         return cache
 
-    def draw(self, surface):
-        """Render the tile grid onto the provided surface."""
+    def draw(self, surface, camera_x=0, camera_y=0):
+        """Render the tile grid onto the provided surface with camera offset."""
         if not self.tile_grid:
             return
         for y, row in enumerate(self.tile_grid):
             for x, tile_id in enumerate(row):
                 img_data = self.tile_images.get(tile_id)
                 if img_data:
-                    screen_x = x * TILE_WIDTH + img_data['grid_ox']
-                    screen_y = y * TILE_HEIGHT + img_data['grid_oy']
-                    # Blit directly without clipping to allow overflow for taller/wider tiles
-                    surface.blit(img_data['img'], (screen_x, screen_y))
+                    world_x = x * TILE_WIDTH + img_data['grid_ox']
+                    world_y = y * TILE_HEIGHT + img_data['grid_oy']
+                    # Convert world position to screen position
+                    screen_x = world_x - camera_x
+                    screen_y = world_y - camera_y
+                    # Only draw if tile is visible on screen (optional optimization)
+                    img = img_data['img']
+                    if (screen_x + img.get_width() >= 0 and screen_x < surface.get_width() and
+                        screen_y + img.get_height() >= 0 and screen_y < surface.get_height()):
+                        surface.blit(img, (screen_x, screen_y))
 
     def load_mobs_from_csv(self, map_id: int):
         """

@@ -16,9 +16,12 @@ class HealthBar(pygame.sprite.Sprite):
             self.bar_color = (0, 204, 0)
         
 
-    def update(self):
+    def update(self, camera_x=0, camera_y=0):
         sum = (self.object.rect.center[0] - self.object.rect.x)
-        self.bar_pos = (self.object.rect.x - sum/2, self.object.rect.top + - 20)
+        world_x = self.object.rect.x - sum/2
+        world_y = self.object.rect.top - 20
+        # Convert to screen coordinates
+        self.bar_pos = (world_x - camera_x, world_y - camera_y)
         self.progress = self.object.health / self.object.max_health
         self.draw()
 
