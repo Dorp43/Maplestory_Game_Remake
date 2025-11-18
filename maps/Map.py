@@ -6,7 +6,7 @@ from mobs.Mob import Mob
 from maps import map0
 
 TILE_WIDTH = 90
-TILE_HEIGHT = 60  # Restored to 60 for seamless tile connections and better sprite fit
+TILE_HEIGHT = 60
 
 
 class Map:
@@ -86,11 +86,14 @@ class Map:
                         oy = img_data['grid_oy']
                         ow = img_data['img'].get_width()
                         oh = img_data['img'].get_height()
+                        solid_top_rel = img_data.get('solid_top_rel', 0)
+                        collision_y = y * TILE_HEIGHT + oy + solid_top_rel
+                        collision_h = max(1, oh - solid_top_rel)
                         rect = pygame.Rect(
                             x * TILE_WIDTH + ox,
-                            y * TILE_HEIGHT + oy,
+                            collision_y,
                             ow,
-                            oh,
+                            collision_h,
                         )
                         self.tiles.append(rect)
                     else:
@@ -151,10 +154,22 @@ class Map:
 
             if top_count > bottom_count:
                 grid_oy = 0  # Top-align (e.g., for top-heavy grass/upper cliffs)
+                solid_top_rel = 0  # Full for top-heavy
             elif bottom_count > top_count:
                 grid_oy = TILE_HEIGHT - oh  # Bottom-align (e.g., for ground/dirt bases)
+                # Find solid top: first row from top with >10% opaque (lower threshold to close small gaps)
+                solid_top_rel = oh  # Default to bottom if no dense row
+                for rel_y in range(oh):
+                    row_count = 0
+                    for rel_x in range(ow):
+                        if mask.get_at((rel_x, rel_y)):
+                            row_count += 1
+                    if row_count > ow // 10:  # 10% threshold for even fainter edges
+                        solid_top_rel = rel_y
+                        break
             else:
                 grid_oy = (TILE_HEIGHT - oh) // 2  # Center-align for balanced
+                solid_top_rel = 0  # Full for balanced
 
             # Horizontal always center
             grid_ox = (TILE_WIDTH - ow) // 2
@@ -163,6 +178,7 @@ class Map:
                 'img': img_orig,
                 'grid_ox': grid_ox,
                 'grid_oy': grid_oy,
+                'solid_top_rel': solid_top_rel,
             }
         return cache
 
