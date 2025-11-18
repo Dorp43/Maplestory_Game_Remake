@@ -77,6 +77,9 @@ class Map:
         if not grid:
             return
 
+        # Calculate map boundaries (find the actual content bounds)
+        self.map_min_x, self.map_max_x, self.map_min_y, self.map_max_y = self.calculate_map_bounds()
+
         for y, row in enumerate(grid):
             for x, cell in enumerate(row):
                 if cell in self.solid_tile_ids:
@@ -181,6 +184,51 @@ class Map:
                 'solid_top_rel': solid_top_rel,
             }
         return cache
+
+    def calculate_map_bounds(self):
+        """
+        Calculate the actual boundaries of the map based on non-empty tiles.
+        Returns (min_x, max_x, min_y, max_y) in world coordinates.
+        """
+        if not self.tile_grid:
+            return 0, 0, 0, 0
+
+        min_x = None
+        max_x = None
+        min_y = None
+        max_y = None
+
+        for y, row in enumerate(self.tile_grid):
+            for x, tile_id in enumerate(row):
+                if tile_id != 0:  # Non-empty tile
+                    img_data = self.tile_images.get(tile_id)
+                    if img_data:
+                        world_x = x * TILE_WIDTH + img_data['grid_ox']
+                        world_y = y * TILE_HEIGHT + img_data['grid_oy']
+                        img = img_data['img']
+                        tile_right = world_x + img.get_width()
+                        tile_bottom = world_y + img.get_height()
+
+                        if min_x is None or world_x < min_x:
+                            min_x = world_x
+                        if max_x is None or tile_right > max_x:
+                            max_x = tile_right
+                        if min_y is None or world_y < min_y:
+                            min_y = world_y
+                        if max_y is None or tile_bottom > max_y:
+                            max_y = tile_bottom
+
+        # Default to screen size if no tiles found
+        if min_x is None:
+            return 0, self.screen.get_width(), 0, self.screen.get_height()
+
+        return min_x, max_x, min_y, max_y
+
+    def get_map_bounds(self):
+        """Get the map boundaries. Returns (min_x, max_x, min_y, max_y)"""
+        if hasattr(self, 'map_min_x'):
+            return self.map_min_x, self.map_max_x, self.map_min_y, self.map_max_y
+        return 0, self.screen.get_width(), 0, self.screen.get_height()
 
     def draw(self, surface, camera_x=0, camera_y=0):
         """Render the tile grid onto the provided surface with camera offset."""

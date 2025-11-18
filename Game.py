@@ -40,14 +40,36 @@ class Game:
         pygame.display.set_caption('Maplestory')
 
     def update_camera(self, player):
-        """Update camera to follow player, keeping player centered on screen"""
+        """Update camera to follow player, keeping player centered on screen, clamped to map boundaries"""
+        if not self.map:
+            return
+            
         # Center camera on player
         target_x = player.rect.centerx - self.screen_width // 2
         target_y = player.rect.centery - self.screen_height // 2
         
-        # Smooth camera movement (optional: can make instant by removing lerp)
-        self.camera_x = target_x
-        self.camera_y = target_y
+        # Get map boundaries
+        map_min_x, map_max_x, map_min_y, map_max_y = self.map.get_map_bounds()
+        
+        # Calculate camera limits (camera position is top-left of screen)
+        # Horizontal: clamp both sides (don't show void on left or right)
+        camera_min_x = map_min_x
+        camera_max_x = map_max_x - self.screen_width
+        
+        # Vertical: only clamp bottom (don't show void below), but allow void above
+        # Don't set camera_min_y - allow camera to go above map_min_y to show void at top
+        camera_max_y = map_max_y - self.screen_height
+        
+        # Handle case where map is smaller than screen horizontally
+        if camera_max_x < camera_min_x:
+            camera_max_x = camera_min_x
+        
+        # Clamp camera horizontally (both sides)
+        self.camera_x = max(camera_min_x, min(camera_max_x, target_x))
+        
+        # Clamp camera vertically (only bottom, allow going above map top)
+        # Don't clamp to map_min_y - we want to allow showing void above
+        self.camera_y = min(camera_max_y, target_y)
 
     def game_loop(self):
         """ Game loop main method """
