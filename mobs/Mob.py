@@ -7,18 +7,20 @@ FLOOR = 465
 
 
 class Mob(pygame.sprite.Sprite):
-    def __init__(self, screen, players, tiles, slope_tiles=None, mob_name=None, x=0, y=0, scale=1, speed=1, health=150, map_bounds=None):
+    def __init__(self, screen, players, tiles, slope_tiles=None, collision_lines=None, mob_name=None, x=0, y=0, scale=1, speed=1, health=150, map_bounds=None):
         pygame.sprite.Sprite.__init__(self)
         self.screen = screen
         self.alive = True
         self.mob_name = mob_name
         self.speed = speed
         self.players = players
-        # list of pygame.Rect for solid tiles / platforms
+        # list of pygame.Rect for solid tiles / platforms (legacy, may be empty if using lines)
         self.tiles = tiles
         self.slope_tiles = slope_tiles or []
+        self.collision_lines = collision_lines or []
         self.max_slope_step_up = 60
         self.max_slope_step_down = 25
+        self.current_line_id = None  # Track which line the mob is currently on for smooth transitions
         # Map boundaries: (min_x, max_x, min_y, max_y) - None means no boundaries
         self.map_bounds = map_bounds
         self.direction = -1
@@ -190,39 +192,63 @@ class Mob(pygame.sprite.Sprite):
             self.vel_x
         dx += self.vel_x
 
-        # --- horizontal movement & collision against tiles ---
-        self.rect.x += dx
-        for tile in self.tiles:
-            if self.rect.colliderect(tile):
-                if dx > 0:
-                    self.rect.right = tile.left
-                elif dx < 0:
-                    self.rect.left = tile.right
+        # Use line-based collision if lines are available, otherwise fall back to tiles
+        if self.collision_lines:
+            # --- horizontal movement & collision against lines ---
+            self.rect.x += dx
+            self._handle_line_horizontal_collision(dx)
+            
+            # Clamp horizontal position within patrol radius
+            min_x = self.spawn_x - self.patrol_radius
+            max_x = self.spawn_x + self.patrol_radius
+            if self.rect.centerx < min_x:
+                self.rect.centerx = min_x
+                self.moving_left = False
+                self.moving_right = True
+            elif self.rect.centerx > max_x:
+                self.rect.centerx = max_x
+                self.moving_right = False
+                self.moving_left = True
+            
+            # --- vertical movement & collision against lines ---
+            self.rect.y += dy
+            self.in_air = True
+            self._handle_line_vertical_collision(dy)
+        else:
+            # Legacy tile-based collision
+            # --- horizontal movement & collision against tiles ---
+            self.rect.x += dx
+            for tile in self.tiles:
+                if self.rect.colliderect(tile):
+                    if dx > 0:
+                        self.rect.right = tile.left
+                    elif dx < 0:
+                        self.rect.left = tile.right
 
-        # Clamp horizontal position within patrol radius
-        min_x = self.spawn_x - self.patrol_radius
-        max_x = self.spawn_x + self.patrol_radius
-        if self.rect.centerx < min_x:
-            self.rect.centerx = min_x
-            self.moving_left = False
-            self.moving_right = True
-        elif self.rect.centerx > max_x:
-            self.rect.centerx = max_x
-            self.moving_right = False
-            self.moving_left = True
+            # Clamp horizontal position within patrol radius
+            min_x = self.spawn_x - self.patrol_radius
+            max_x = self.spawn_x + self.patrol_radius
+            if self.rect.centerx < min_x:
+                self.rect.centerx = min_x
+                self.moving_left = False
+                self.moving_right = True
+            elif self.rect.centerx > max_x:
+                self.rect.centerx = max_x
+                self.moving_right = False
+                self.moving_left = True
 
-        # --- vertical movement & collision against tiles ---
-        self.rect.y += dy
-        self.in_air = True
-        for tile in self.tiles:
-            if self.rect.colliderect(tile):
-                if self.vel_y > 0:  # falling
-                    self.rect.bottom = tile.top
-                    self.vel_y = 0
-                    self.in_air = False
-                elif self.vel_y < 0:  # jumping up
-                    self.rect.top = tile.bottom
-                    self.vel_y = 0
+            # --- vertical movement & collision against tiles ---
+            self.rect.y += dy
+            self.in_air = True
+            for tile in self.tiles:
+                if self.rect.colliderect(tile):
+                    if self.vel_y > 0:  # falling
+                        self.rect.bottom = tile.top
+                        self.vel_y = 0
+                        self.in_air = False
+                    elif self.vel_y < 0:  # jumping up
+                        self.rect.top = tile.bottom
+                        self.vel_y = 0
 
         if self.slope_tiles:
             self._handle_slope_collision()
@@ -304,6 +330,253 @@ class Mob(pygame.sprite.Sprite):
             if right_idx < len(columns) and columns[right_idx] is not None:
                 return columns[right_idx]
         return None
+
+    def _handle_line_horizontal_collision(self, dx):
+        """Handle horizontal collision with lines (walls/barriers)."""
+        if dx == 0:
+            return
+        
+        # Check collision with vertical or diagonal lines
+        for line in self.collision_lines:
+            x1, y1 = line["x1"], line["y1"]
+            x2, y2 = line["x2"], line["y2"]
+            
+            # Skip horizontal lines (they're walkable surfaces, not barriers)
+            if abs(y2 - y1) < 1:  # Essentially horizontal
+                continue
+            
+            line_min_x = min(x1, x2)
+            line_max_x = max(x1, x2)
+            line_min_y = min(y1, y2)
+            line_max_y = max(y1, y2)
+            
+            # Check if line is in mob's horizontal range
+            if line_max_x < self.rect.left or line_min_x > self.rect.right:
+                continue
+            
+            # For vertical lines, check direct collision
+            if abs(x2 - x1) < 1:  # Essentially vertical
+                line_x = x1
+                # Only block if line is actually in the mob's vertical range
+                if line_max_y >= self.rect.top and line_min_y <= self.rect.bottom:
+                    if dx > 0 and self.rect.right >= line_x and self.rect.right - dx < line_x:
+                        self.rect.right = line_x
+                    elif dx < 0 and self.rect.left <= line_x and self.rect.left - dx > line_x:
+                        self.rect.left = line_x
+            else:
+                # Diagonal line - only treat as barrier if mob is NOT standing on it
+                # Check if mob's feet are on this line (if so, it's walkable, not a barrier)
+                if abs(x2 - x1) > 0.001:
+                    m = (y2 - y1) / (x2 - x1)
+                    b = y1 - m * x1
+                    
+                    # Check if mob is standing on this line
+                    padding = min(12, max(2, self.rect.width // 6))
+                    probe_points = [
+                        self.rect.left + padding,
+                        self.rect.centerx,
+                        self.rect.right - padding,
+                    ]
+                    
+                    is_standing_on = False
+                    for foot_x in probe_points:
+                        if line_min_x <= foot_x <= line_max_x:
+                            surface_y = m * foot_x + b
+                            # Check if mob's feet are on or very close to the line
+                            if abs(surface_y - self.rect.bottom) <= self.max_slope_step_down + 5:
+                                is_standing_on = True
+                                break
+                    
+                    # If mob is standing on this line, skip it (it's a walkable surface)
+                    if is_standing_on:
+                        continue
+                    
+                    # Otherwise, treat as barrier - check if mob would intersect with it
+                    # Check if line is in mob's vertical range
+                    if line_max_y < self.rect.top or line_min_y > self.rect.bottom:
+                        continue
+                    
+                    # Check if mob's left/right edge would cross the line
+                    if dx > 0:  # Moving right
+                        test_x = self.rect.right
+                        test_y = m * test_x + b
+                        if line_min_x <= test_x <= line_max_x and line_min_y <= test_y <= line_max_y:
+                            if self.rect.top <= test_y <= self.rect.bottom:
+                                if abs(m) > 0.001:
+                                    y_at_top = self.rect.top
+                                    x_at_top = (y_at_top - b) / m
+                                    y_at_bottom = self.rect.bottom
+                                    x_at_bottom = (y_at_bottom - b) / m
+                                    
+                                    if line_min_x <= x_at_top <= line_max_x or line_min_x <= x_at_bottom <= line_max_x:
+                                        self.rect.right = min(x_at_top, x_at_bottom) if m > 0 else max(x_at_top, x_at_bottom)
+                    elif dx < 0:  # Moving left
+                        test_x = self.rect.left
+                        test_y = m * test_x + b
+                        if line_min_x <= test_x <= line_max_x and line_min_y <= test_y <= line_max_y:
+                            if self.rect.top <= test_y <= self.rect.bottom:
+                                if abs(m) > 0.001:
+                                    y_at_top = self.rect.top
+                                    x_at_top = (y_at_top - b) / m
+                                    y_at_bottom = self.rect.bottom
+                                    x_at_bottom = (y_at_bottom - b) / m
+                                    
+                                    if line_min_x <= x_at_top <= line_max_x or line_min_x <= x_at_bottom <= line_max_x:
+                                        self.rect.left = max(x_at_top, x_at_bottom) if m > 0 else min(x_at_top, x_at_bottom)
+
+    def _handle_line_vertical_collision(self, dy):
+        """Handle vertical collision with lines (walkable surfaces)."""
+        # Skip collision entirely when moving upward (jumping) - allow natural jump movement
+        # Check both vel_y and dy to catch all jumping cases
+        # This prevents the mob from being snapped back to the ground when jumping on slopes
+        if self.vel_y < 0 or dy < 0:  # Moving upward (jumping) - check both velocity and movement
+            # Clear current line tracking when jumping
+            self.current_line_id = None
+            return
+        
+        # Check if mob's feet are on a line
+        padding = min(12, max(2, self.rect.width // 6))
+        probe_points = [
+            self.rect.left + padding,
+            self.rect.centerx,
+            self.rect.right - padding,
+        ]
+        
+        # Collect all valid surface positions for each probe point
+        valid_surfaces = []  # List of (surface_y, line, foot_x, gap_abs)
+        
+        for foot_x in probe_points:
+            for line in self.collision_lines:
+                x1, y1 = line["x1"], line["y1"]
+                x2, y2 = line["x2"], line["y2"]
+                
+                # Skip vertical lines (they're barriers, not walkable)
+                if abs(x2 - x1) < 1:
+                    continue
+                
+                # Check if foot_x is within line's x range
+                line_min_x = min(x1, x2)
+                line_max_x = max(x1, x2)
+                
+                # For connected lines, allow checking at exact endpoints with small tolerance
+                # This ensures smooth transitions at connection points
+                tolerance = 0.1  # Small tolerance for floating point precision
+                if foot_x < line_min_x - tolerance or foot_x > line_max_x + tolerance:
+                    continue
+                
+                # Clamp foot_x to line bounds to handle endpoints correctly
+                clamped_x = max(line_min_x, min(line_max_x, foot_x))
+                
+                # Calculate Y position on line for this X
+                if abs(x2 - x1) > 0.001:
+                    m = (y2 - y1) / (x2 - x1)
+                    b = y1 - m * x1
+                    surface_y = m * clamped_x + b
+                else:
+                    # Horizontal line
+                    surface_y = y1
+                
+                # Check if mob is on or above the line
+                vertical_gap = surface_y - self.rect.bottom
+                # Allow collision if:
+                # 1. Mob is above the line (gap > 0) and within step-down range (falling onto it)
+                # 2. Mob is on or slightly below the line (gap <= small threshold) to prevent falling through
+                # This prevents teleporting upward when touching lines from below, but allows staying on lines
+                if -2 <= vertical_gap <= self.max_slope_step_down:
+                    gap_abs = abs(vertical_gap)
+                    valid_surfaces.append((surface_y, line, foot_x, gap_abs))
+        
+        if not valid_surfaces:
+            return
+        
+        # Group surfaces by line to find which line covers the most probe points
+        line_surface_map = {}  # line_id -> list of (surface_y, foot_x, gap_abs)
+        for surface_y, line, foot_x, gap_abs in valid_surfaces:
+            line_id = id(line)
+            if line_id not in line_surface_map:
+                line_surface_map[line_id] = []
+            line_surface_map[line_id].append((surface_y, foot_x, gap_abs))
+        
+        # Find line that covers the most probe points (most stable for connected lines)
+        # Also track which line the mob is currently on to ensure smooth transitions
+        best_line_id = None
+        max_coverage = 0
+        best_center_y = None
+        best_avg_gap = None
+        
+        # Try to find the line the mob is currently on (for smooth transitions)
+        current_line_id = self.current_line_id
+        if not self.in_air:
+            # Check which line the mob's center is on
+            center_x = self.rect.centerx
+            for surface_y, line, foot_x, gap_abs in valid_surfaces:
+                if abs(foot_x - center_x) < 5:  # Close to center
+                    x1, y1 = line["x1"], line["y1"]
+                    x2, y2 = line["x2"], line["y2"]
+                    line_min_x = min(x1, x2)
+                    line_max_x = max(x1, x2)
+                    if line_min_x <= center_x <= line_max_x:
+                        if abs(surface_y - self.rect.bottom) < 5:  # Very close to mob's feet
+                            current_line_id = id(line)
+                            break
+        
+        for line_id, surfaces in line_surface_map.items():
+            coverage = len(surfaces)
+            # Find the surface Y for the center probe point
+            center_y = None
+            avg_gap = sum(s[2] for s in surfaces) / len(surfaces)
+            
+            for surface_y, foot_x, gap_abs in surfaces:
+                if abs(foot_x - self.rect.centerx) < 1:
+                    center_y = surface_y
+                    break
+            
+            # If no center match, use average
+            if center_y is None:
+                center_y = sum(s[0] for s in surfaces) / len(surfaces)
+            
+            # Prefer the line the mob is currently on (for smooth transitions)
+            is_current_line = (line_id == current_line_id)
+            
+            # Prefer lines that cover more probe points (more stable)
+            if coverage > max_coverage:
+                max_coverage = coverage
+                best_line_id = line_id
+                best_center_y = center_y
+                best_avg_gap = avg_gap
+            elif coverage == max_coverage:
+                # If same coverage, prefer current line first, then smaller gap
+                if is_current_line and best_line_id != current_line_id:
+                    # Switch to current line for smooth transition
+                    best_line_id = line_id
+                    best_center_y = center_y
+                    best_avg_gap = avg_gap
+                elif best_avg_gap is None or avg_gap < best_avg_gap or (abs(avg_gap - best_avg_gap) < 0.1 and center_y < best_center_y):
+                    if not (best_line_id == current_line_id and not is_current_line):
+                        # Don't switch away from current line unless new line is clearly better
+                        best_line_id = line_id
+                        best_center_y = center_y
+                        best_avg_gap = avg_gap
+        
+        # Use the best line's center Y position for smooth transitions
+        if best_center_y is not None:
+            self.rect.bottom = best_center_y
+            self.vel_y = 0
+            self.in_air = False
+            # Track which line we're on for next frame
+            self.current_line_id = best_line_id
+        else:
+            # Fallback: use the surface with smallest gap
+            valid_surfaces.sort(key=lambda s: (s[3], s[0]))  # Sort by gap, then by Y
+            if valid_surfaces:
+                self.rect.bottom = valid_surfaces[0][0]
+                self.vel_y = 0
+                self.in_air = False
+                # Track which line we're on
+                self.current_line_id = id(valid_surfaces[0][1])
+            else:
+                # Not on any line
+                self.current_line_id = None
 
 
     def update_animation(self):

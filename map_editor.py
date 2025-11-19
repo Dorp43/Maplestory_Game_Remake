@@ -44,6 +44,7 @@ GRID_COLS = 80
 GRID_ROWS = 40  # Increased from 20 to 40 for finer vertical placement while keeping fit
 CAMERA_SPEED = 20
 PALETTE_ENTRY_HEIGHT = TILE_HEIGHT + 16
+SNAP_DISTANCE = 15  # Distance in pixels to snap to line endpoints
 
 PREVIEW_WIDTH = TILE_WIDTH // 2
 PREVIEW_HEIGHT = TILE_HEIGHT // 2
@@ -61,7 +62,8 @@ def get_paths(map_id: int):
     base_dir = os.path.dirname(os.path.abspath(__file__))
     tiles_csv_path = os.path.join(base_dir, "maps", f"map{map_id}_tiles.csv")
     mobs_csv_path = os.path.join(base_dir, "maps", f"map{map_id}_mobs.csv")
-    return base_dir, tiles_csv_path, mobs_csv_path
+    lines_json_path = os.path.join(base_dir, "maps", f"map{map_id}_collision_lines.json")
+    return base_dir, tiles_csv_path, mobs_csv_path, lines_json_path
 
 
 def discover_mob_types(base_dir: str):
@@ -229,6 +231,27 @@ def save_mobs(csv_path: str, mobs):
     print(f"[map_editor] Saved mobs to {csv_path}")
 
 
+def load_collision_lines(json_path: str):
+    """Load collision lines from JSON file."""
+    if not os.path.exists(json_path):
+        return []
+    try:
+        with open(json_path, "r") as f:
+            data = json.load(f)
+            return data.get("lines", [])
+    except (json.JSONDecodeError, IOError) as e:
+        print(f"[map_editor] Error loading collision lines: {e}")
+        return []
+
+
+def save_collision_lines(json_path: str, lines):
+    """Save collision lines to JSON file."""
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    with open(json_path, "w") as f:
+        json.dump({"lines": lines}, f, indent=2)
+    print(f"[map_editor] Saved {len(lines)} collision lines to {json_path}")
+
+
 def load_mob_images(base_dir: str, mob_types, target_height: int):
     mob_images = {}
     for name in mob_types:
@@ -250,6 +273,38 @@ def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
 
+def find_nearest_endpoint(collision_lines, world_x, world_y, exclude_line_idx=None):
+    """
+    Find the nearest line endpoint to the given world coordinates.
+    Returns (x, y, line_idx, endpoint_idx) or None if no endpoint is within snap distance.
+    endpoint_idx: 0 for start, 1 for end
+    """
+    nearest = None
+    nearest_dist = SNAP_DISTANCE ** 2  # Use squared distance for comparison
+    
+    for i, line in enumerate(collision_lines):
+        if exclude_line_idx is not None and i == exclude_line_idx:
+            continue
+        
+        # Check start point
+        dx1 = world_x - line["x1"]
+        dy1 = world_y - line["y1"]
+        dist1_sq = dx1 * dx1 + dy1 * dy1
+        if dist1_sq < nearest_dist:
+            nearest_dist = dist1_sq
+            nearest = (line["x1"], line["y1"], i, 0)
+        
+        # Check end point
+        dx2 = world_x - line["x2"]
+        dy2 = world_y - line["y2"]
+        dist2_sq = dx2 * dx2 + dy2 * dy2
+        if dist2_sq < nearest_dist:
+            nearest_dist = dist2_sq
+            nearest = (line["x2"], line["y2"], i, 1)
+    
+    return nearest
+
+
 def main():
     if len(sys.argv) > 1:
         try:
@@ -260,7 +315,7 @@ def main():
     else:
         map_id = DEFAULT_MAP_ID
 
-    base_dir, tiles_csv_path, mobs_csv_path = get_paths(map_id)
+    base_dir, tiles_csv_path, mobs_csv_path, lines_json_path = get_paths(map_id)
     tile_entries = load_tile_manifest(base_dir)
     mob_types = discover_mob_types(base_dir)
 
@@ -277,6 +332,7 @@ def main():
 
     grid = load_or_create_grid(tiles_csv_path, GRID_COLS, GRID_ROWS)
     mobs = load_mobs(mobs_csv_path)
+    collision_lines = load_collision_lines(lines_json_path)
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 20)
@@ -289,6 +345,15 @@ def main():
     selected_tile_id = 0
     mode = "tiles"
     current_mob_index = 0
+    
+    # Line editing state
+    line_drawing = False
+    line_start = None
+    selected_line_idx = None
+    selected_endpoint = None  # 0 = start, 1 = end
+    drag_line = False
+    drag_endpoint = False
+    drag_start_pos = None  # Store initial mouse position when starting drag
 
     running = True
     while running:
@@ -320,8 +385,20 @@ def main():
                 elif event.key == pygame.K_s:
                     save_grid(tiles_csv_path, grid)
                     save_mobs(mobs_csv_path, mobs)
+                    if mode == "lines":
+                        save_collision_lines(lines_json_path, collision_lines)
                 elif event.key == pygame.K_TAB:
-                    mode = "mobs" if mode == "tiles" else "tiles"
+                    if mode == "tiles":
+                        mode = "mobs"
+                    elif mode == "mobs":
+                        mode = "lines"
+                    else:
+                        mode = "tiles"
+                elif event.key == pygame.K_DELETE and mode == "lines":
+                    if selected_line_idx is not None and 0 <= selected_line_idx < len(collision_lines):
+                        collision_lines.pop(selected_line_idx)
+                        selected_line_idx = None
+                        selected_endpoint = None
                 elif event.key in (pygame.K_LEFT, pygame.K_a):
                     move_left = True
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
@@ -357,38 +434,198 @@ def main():
                 elif viewport_rect.collidepoint(event.pos):
                     world_x = camera_x + event.pos[0]
                     world_y = camera_y + event.pos[1]
-                    col = int(world_x // TILE_WIDTH)
-                    row = int(world_y // TILE_HEIGHT)
-                    if 0 <= col < GRID_COLS and 0 <= row < GRID_ROWS:
-                        if mode == "tiles":
+                    if mode == "tiles":
+                        col = int(world_x // TILE_WIDTH)
+                        row = int(world_y // TILE_HEIGHT)
+                        if 0 <= col < GRID_COLS and 0 <= row < GRID_ROWS:
                             if event.button == 1:
                                 grid[row][col] = selected_tile_id
                             elif event.button == 3:
                                 grid[row][col] = 0
-                        elif mode == "mobs":
-                            if event.button == 1:
-                                mob_name = mob_types[current_mob_index]
-                                health = MOB_DEFAULT_HEALTH.get(mob_name, 100)
-                                mobs.append(
-                                    {
-                                        "mob_name": mob_name,
-                                        "x": world_x,
-                                        "y": world_y,
-                                        "health": health,
-                                    }
-                                )
-                            elif event.button == 3 and mobs:
-                                closest_idx = None
-                                closest_dist = 25 ** 2
-                                for i, mob in enumerate(mobs):
-                                    dx = mob["x"] - world_x
-                                    dy = mob["y"] - world_y
-                                    dist = dx * dx + dy * dy
-                                    if dist <= closest_dist:
-                                        closest_dist = dist
-                                        closest_idx = i
-                                if closest_idx is not None:
-                                    mobs.pop(closest_idx)
+                    elif mode == "mobs":
+                        if event.button == 1:
+                            mob_name = mob_types[current_mob_index]
+                            health = MOB_DEFAULT_HEALTH.get(mob_name, 100)
+                            mobs.append(
+                                {
+                                    "mob_name": mob_name,
+                                    "x": world_x,
+                                    "y": world_y,
+                                    "health": health,
+                                }
+                            )
+                        elif event.button == 3 and mobs:
+                            closest_idx = None
+                            closest_dist = 25 ** 2
+                            for i, mob in enumerate(mobs):
+                                dx = mob["x"] - world_x
+                                dy = mob["y"] - world_y
+                                dist = dx * dx + dy * dy
+                                if dist <= closest_dist:
+                                    closest_dist = dist
+                                    closest_idx = i
+                            if closest_idx is not None:
+                                mobs.pop(closest_idx)
+                    elif mode == "lines":
+                        if event.button == 1:  # Left click
+                            # Check if clicking on an endpoint
+                            endpoint_hit = False
+                            for i, line in enumerate(collision_lines):
+                                x1, y1 = line["x1"], line["y1"]
+                                x2, y2 = line["x2"], line["y2"]
+                                # Check start point
+                                dist1 = math.sqrt((world_x - x1)**2 + (world_y - y1)**2)
+                                if dist1 < 10:  # 10 pixel selection radius
+                                    selected_line_idx = i
+                                    selected_endpoint = 0
+                                    drag_endpoint = True
+                                    drag_start_pos = (world_x, world_y)
+                                    endpoint_hit = True
+                                    break
+                                # Check end point
+                                dist2 = math.sqrt((world_x - x2)**2 + (world_y - y2)**2)
+                                if dist2 < 10:
+                                    selected_line_idx = i
+                                    selected_endpoint = 1
+                                    drag_endpoint = True
+                                    drag_start_pos = (world_x, world_y)
+                                    endpoint_hit = True
+                                    break
+                            
+                            if not endpoint_hit:
+                                # Check if clicking on line itself
+                                line_hit = False
+                                for i, line in enumerate(collision_lines):
+                                    x1, y1 = line["x1"], line["y1"]
+                                    x2, y2 = line["x2"], line["y2"]
+                                    # Calculate distance from point to line segment
+                                    A = world_x - x1
+                                    B = world_y - y1
+                                    C = x2 - x1
+                                    D = y2 - y1
+                                    dot = A * C + B * D
+                                    len_sq = C * C + D * D
+                                    if len_sq > 0:
+                                        param = dot / len_sq
+                                        if 0 <= param <= 1:
+                                            xx = x1 + param * C
+                                            yy = y1 + param * D
+                                            dist = math.sqrt((world_x - xx)**2 + (world_y - yy)**2)
+                                            if dist < 10:
+                                                selected_line_idx = i
+                                                selected_endpoint = None
+                                                drag_line = True
+                                                drag_start_pos = (world_x, world_y)
+                                                line_hit = True
+                                                break
+                                
+                                if not line_hit:
+                                    # Start drawing new line - check for snap to endpoint
+                                    snap_result = find_nearest_endpoint(collision_lines, world_x, world_y)
+                                    if snap_result:
+                                        snap_x, snap_y, _, _ = snap_result
+                                        line_start = (snap_x, snap_y)
+                                    else:
+                                        line_start = (world_x, world_y)
+                                    line_drawing = True
+                                    selected_line_idx = None
+                                    selected_endpoint = None
+                        elif event.button == 3:  # Right click
+                            # Delete line if clicking on it
+                            for i in range(len(collision_lines) - 1, -1, -1):
+                                line = collision_lines[i]
+                                x1, y1 = line["x1"], line["y1"]
+                                x2, y2 = line["x2"], line["y2"]
+                                # Check if click is near line
+                                A = world_x - x1
+                                B = world_y - y1
+                                C = x2 - x1
+                                D = y2 - y1
+                                dot = A * C + B * D
+                                len_sq = C * C + D * D
+                                if len_sq > 0:
+                                    param = dot / len_sq
+                                    if 0 <= param <= 1:
+                                        xx = x1 + param * C
+                                        yy = y1 + param * D
+                                        dist = math.sqrt((world_x - xx)**2 + (world_y - yy)**2)
+                                        if dist < 15:
+                                            collision_lines.pop(i)
+                                            if selected_line_idx == i:
+                                                selected_line_idx = None
+                                                selected_endpoint = None
+                                            break
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if mode == "lines":
+                    if event.button == 1:
+                        if line_drawing and line_start:
+                            world_x = camera_x + event.pos[0]
+                            world_y = camera_y + event.pos[1]
+                            # Check for snap to endpoint when finishing line
+                            snap_result = find_nearest_endpoint(collision_lines, world_x, world_y)
+                            if snap_result:
+                                snap_x, snap_y, _, _ = snap_result
+                                end_x, end_y = snap_x, snap_y
+                            else:
+                                end_x, end_y = world_x, world_y
+                            
+                            collision_lines.append({
+                                "x1": line_start[0],
+                                "y1": line_start[1],
+                                "x2": end_x,
+                                "y2": end_y,
+                            })
+                            line_drawing = False
+                            line_start = None
+                        drag_line = False
+                        drag_endpoint = False
+                        drag_start_pos = None
+            elif event.type == pygame.MOUSEMOTION:
+                if mode == "lines":
+                    if drag_endpoint and selected_line_idx is not None and drag_start_pos:
+                        world_x = camera_x + event.pos[0]
+                        world_y = camera_y + event.pos[1]
+                        line = collision_lines[selected_line_idx]
+                        
+                        # Check for snap to other endpoints
+                        snap_result = find_nearest_endpoint(collision_lines, world_x, world_y, exclude_line_idx=selected_line_idx)
+                        if snap_result:
+                            snap_x, snap_y, _, _ = snap_result
+                            # Snap to the endpoint
+                            if selected_endpoint == 0:
+                                line["x1"] = snap_x
+                                line["y1"] = snap_y
+                            elif selected_endpoint == 1:
+                                line["x2"] = snap_x
+                                line["y2"] = snap_y
+                            # Update drag start to snapped position
+                            drag_start_pos = (snap_x, snap_y)
+                        else:
+                            # Calculate offset from initial drag position
+                            dx = world_x - drag_start_pos[0]
+                            dy = world_y - drag_start_pos[1]
+                            if selected_endpoint == 0:
+                                line["x1"] += dx
+                                line["y1"] += dy
+                            elif selected_endpoint == 1:
+                                line["x2"] += dx
+                                line["y2"] += dy
+                            # Update drag start position for next frame
+                            drag_start_pos = (world_x, world_y)
+                    elif drag_line and selected_line_idx is not None and drag_start_pos:
+                        world_x = camera_x + event.pos[0]
+                        world_y = camera_y + event.pos[1]
+                        line = collision_lines[selected_line_idx]
+                        # Calculate offset from initial drag position
+                        dx = world_x - drag_start_pos[0]
+                        dy = world_y - drag_start_pos[1]
+                        # Move both endpoints by the offset
+                        line["x1"] += dx
+                        line["y1"] += dy
+                        line["x2"] += dx
+                        line["y2"] += dy
+                        # Update drag start position for next frame
+                        drag_start_pos = (world_x, world_y)
 
         # --- drawing ---
         screen.fill(VIEWPORT_BG)
@@ -430,6 +667,57 @@ def main():
                 overlay = pygame.Surface((TILE_WIDTH, TILE_HEIGHT), pygame.SRCALPHA)
                 overlay.fill(HILIGHT_COLOR)
                 screen.blit(overlay, (highlight_col * TILE_WIDTH - camera_x, highlight_row * TILE_HEIGHT - camera_y))
+
+        # draw collision lines
+        if mode == "lines" or True:  # Always show lines
+            for i, line in enumerate(collision_lines):
+                x1 = line["x1"] - camera_x
+                y1 = line["y1"] - camera_y
+                x2 = line["x2"] - camera_x
+                y2 = line["y2"] - camera_y
+                
+                # Draw line
+                color = (0, 255, 0) if i == selected_line_idx else (255, 0, 0)
+                pygame.draw.line(screen, color, (x1, y1), (x2, y2), 3)
+                
+                # Draw endpoints
+                endpoint_color = (255, 255, 0) if (i == selected_line_idx and selected_endpoint == 0) else (0, 255, 255)
+                pygame.draw.circle(screen, endpoint_color, (int(x1), int(y1)), 6)
+                endpoint_color = (255, 255, 0) if (i == selected_line_idx and selected_endpoint == 1) else (0, 255, 255)
+                pygame.draw.circle(screen, endpoint_color, (int(x2), int(y2)), 6)
+        
+        # Draw line being drawn with snap preview
+        if mode == "lines" and line_drawing and line_start:
+            world_x = camera_x + mouse_x
+            world_y = camera_y + mouse_y
+            start_x = line_start[0] - camera_x
+            start_y = line_start[1] - camera_y
+            
+            # Check for snap to endpoint when drawing
+            snap_result = find_nearest_endpoint(collision_lines, world_x, world_y)
+            if snap_result:
+                snap_x, snap_y, snap_line_idx, snap_endpoint_idx = snap_result
+                end_x = snap_x - camera_x
+                end_y = snap_y - camera_y
+                # Draw snap indicator
+                pygame.draw.circle(screen, (255, 255, 0), (int(end_x), int(end_y)), 8, 2)
+            else:
+                end_x = mouse_x
+                end_y = mouse_y
+            
+            pygame.draw.line(screen, (0, 255, 255), (start_x, start_y), (end_x, end_y), 2)
+        
+        # Highlight nearby endpoints when in lines mode (for visual feedback)
+        if mode == "lines" and viewport_rect.collidepoint(mouse_x, mouse_y):
+            world_x = camera_x + mouse_x
+            world_y = camera_y + mouse_y
+            snap_result = find_nearest_endpoint(collision_lines, world_x, world_y)
+            if snap_result and not line_drawing:
+                snap_x, snap_y, _, _ = snap_result
+                screen_x = snap_x - camera_x
+                screen_y = snap_y - camera_y
+                # Draw highlight circle for snap target
+                pygame.draw.circle(screen, (255, 255, 0), (int(screen_x), int(screen_y)), 10, 2)
 
         # draw mobs
         for mob in mobs:
@@ -481,12 +769,22 @@ def main():
             y_offset += PALETTE_ENTRY_HEIGHT
 
         # instructions
-        info_lines = [
-            f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs",
-            "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
-            f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
-            "S = save tiles & mobs, ESC/Q = quit",
-        ]
+        if mode == "lines":
+            info_lines = [
+                f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches modes",
+                "Lines: Left click = start line, drag & release = finish line",
+                "Lines automatically SNAP to nearby endpoints (yellow highlight) for perfect connections",
+                "Left click endpoint = select & drag (snaps to other endpoints), Left click line = select & drag whole line",
+                "Right click line = delete, DELETE key = delete selected, S = save",
+                f"Lines: {len(collision_lines)} total | Snap distance: {SNAP_DISTANCE}px",
+            ]
+        else:
+            info_lines = [
+                f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs/lines",
+                "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
+                f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
+                "S = save tiles & mobs, ESC/Q = quit",
+            ]
         y = 5
         for line in info_lines:
             text = font.render(line, True, (20, 20, 20))

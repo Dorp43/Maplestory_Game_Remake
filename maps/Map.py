@@ -17,6 +17,7 @@ class Map:
         self.tiles = []
         self.tile_grid = []
         self.slope_tiles = []
+        self.collision_lines = []
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(base_dir)
@@ -28,6 +29,7 @@ class Map:
         }
         self.tile_images = self.load_tile_images()
         self.set_map(map_id)
+        self.load_collision_lines(map_id)
 
     def set_map(self, map_id):
         """Sets the map to the requested map."""
@@ -353,8 +355,33 @@ class Map:
         map_bounds = self.get_map_bounds()
         for mob in mobs_list:
             print(f"[Map] Spawning mob -> name={mob.get('mob_name')} x={mob.get('x')} y={mob.get('y')} health={mob.get('health')}")
-            self.mobs.add(Mob(self.screen, self.players, self.tiles, self.slope_tiles, map_bounds=map_bounds, **mob))
+            self.mobs.add(Mob(self.screen, self.players, self.tiles, self.slope_tiles, self.collision_lines, map_bounds=map_bounds, **mob))
 
     def get_mobs(self):
         """Returns mobs list."""
         return self.mobs
+
+    def load_collision_lines(self, map_id: int):
+        """Load collision lines from JSON file."""
+        json_path = os.path.join(
+            os.path.dirname(__file__),
+            f"map{map_id}_collision_lines.json"
+        )
+        
+        if not os.path.exists(json_path):
+            print(f"[Map] No collision lines file found for map{map_id}, using empty list")
+            self.collision_lines = []
+            return
+        
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+                self.collision_lines = data.get("lines", [])
+                print(f"[Map] Loaded {len(self.collision_lines)} collision lines from {json_path}")
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[Map] Error loading collision lines: {e}")
+            self.collision_lines = []
+
+    def get_collision_lines(self):
+        """Returns collision lines list."""
+        return self.collision_lines
