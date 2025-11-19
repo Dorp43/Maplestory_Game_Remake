@@ -246,26 +246,39 @@ class Mob(pygame.sprite.Sprite):
                 self.in_air = False
 
     def _handle_slope_collision(self):
-        feet_x = self.rect.centerx
+        padding = min(12, max(2, self.rect.width // 6))
+        probe_points = (
+            self.rect.left + padding,
+            self.rect.centerx,
+            self.rect.right - padding,
+        )
         candidate_y = None
+        smallest_gap = None
 
-        for slope in self.slope_tiles:
-            rect = slope['rect']
-            if feet_x < rect.left or feet_x >= rect.right:
-                continue
-            if self.rect.bottom < rect.top - self.max_slope_step_up:
-                continue
-            if self.rect.top > rect.bottom:
-                continue
+        for foot_x in probe_points:
+            for slope in self.slope_tiles:
+                rect = slope['rect']
+                if foot_x < rect.left or foot_x >= rect.right:
+                    continue
+                if self.rect.bottom < rect.top - self.max_slope_step_up:
+                    continue
+                if self.rect.top > rect.bottom:
+                    continue
 
-            surface_y = self._get_slope_surface_y(slope, feet_x)
-            if surface_y is None:
-                continue
+                surface_y = self._get_slope_surface_y(slope, foot_x)
+                if surface_y is None:
+                    continue
 
-            vertical_gap = surface_y - self.rect.bottom
-            if -self.max_slope_step_up <= vertical_gap <= self.max_slope_step_down:
-                if candidate_y is None or surface_y < candidate_y:
-                    candidate_y = surface_y
+                vertical_gap = surface_y - self.rect.bottom
+                if -self.max_slope_step_up <= vertical_gap <= self.max_slope_step_down:
+                    gap_abs = abs(vertical_gap)
+                    if (
+                        smallest_gap is None
+                        or gap_abs < smallest_gap
+                        or (gap_abs == smallest_gap and surface_y < candidate_y)
+                    ):
+                        candidate_y = surface_y
+                        smallest_gap = gap_abs
 
         if candidate_y is not None:
             self.rect.bottom = candidate_y
