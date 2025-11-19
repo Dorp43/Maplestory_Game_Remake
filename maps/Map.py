@@ -16,6 +16,7 @@ class Map:
         self.mobs = pygame.sprite.Group()
         self.tiles = []
         self.tile_grid = []
+        self.slope_tiles = []
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(base_dir)
@@ -54,6 +55,7 @@ class Map:
         """
         self.tiles = []
         self.tile_grid = []
+        self.slope_tiles = []
 
         csv_path = os.path.join(
             os.path.dirname(__file__),
@@ -83,7 +85,16 @@ class Map:
         for y, row in enumerate(grid):
             for x, cell in enumerate(row):
                 if cell in self.solid_tile_ids:
+                    tile_def = self.tile_defs.get(cell, {})
                     img_data = self.tile_images.get(cell)
+                    label = (tile_def.get("label") or "").lower()
+
+                    if label.startswith("sl") and img_data:
+                        slope_entry = self._build_slope_entry(cell, x, y, img_data)
+                        if slope_entry:
+                            self.slope_tiles.append(slope_entry)
+                        continue
+
                     if img_data:
                         ox = img_data['grid_ox']
                         oy = img_data['grid_oy']
@@ -177,13 +188,57 @@ class Map:
             # Horizontal always center
             grid_ox = (TILE_WIDTH - ow) // 2
 
+            column_profiles = []
+            for rel_x in range(ow):
+                top = None
+                bottom = None
+                for rel_y in range(oh):
+                    if mask.get_at((rel_x, rel_y)):
+                        if top is None:
+                            top = rel_y
+                        bottom = rel_y
+                column_profiles.append(
+                    {
+                        'top': top,
+                        'bottom': bottom,
+                    }
+                )
+
             cache[tile_id] = {
                 'img': img_orig,
                 'grid_ox': grid_ox,
                 'grid_oy': grid_oy,
                 'solid_top_rel': solid_top_rel,
+                'column_profiles': column_profiles,
             }
         return cache
+
+    def _build_slope_entry(self, tile_id, grid_x, grid_y, img_data):
+        """Convert a slope sprite into column-based collision data."""
+        column_profiles = img_data.get('column_profiles')
+        if not column_profiles:
+            return None
+
+        img = img_data['img']
+        ow, oh = img.get_size()
+        world_x = grid_x * TILE_WIDTH + img_data['grid_ox']
+        world_y = grid_y * TILE_HEIGHT + img_data['grid_oy']
+        rect = pygame.Rect(world_x, world_y, ow, oh)
+
+        column_tops = []
+        column_bottoms = []
+        for profile in column_profiles:
+            top = profile['top']
+            bottom = profile['bottom']
+            column_tops.append(world_y + top if top is not None else None)
+            column_bottoms.append(world_y + bottom if bottom is not None else None)
+
+        return {
+            'tile_id': tile_id,
+            'rect': rect,
+            'column_tops': column_tops,
+            'column_bottoms': column_bottoms,
+        }
 
     def calculate_map_bounds(self):
         """
@@ -298,7 +353,7 @@ class Map:
         map_bounds = self.get_map_bounds()
         for mob in mobs_list:
             print(f"[Map] Spawning mob -> name={mob.get('mob_name')} x={mob.get('x')} y={mob.get('y')} health={mob.get('health')}")
-            self.mobs.add(Mob(self.screen, self.players, self.tiles, map_bounds=map_bounds, **mob))
+            self.mobs.add(Mob(self.screen, self.players, self.tiles, self.slope_tiles, map_bounds=map_bounds, **mob))
 
     def get_mobs(self):
         """Returns mobs list."""

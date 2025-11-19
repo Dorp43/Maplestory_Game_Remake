@@ -179,6 +179,7 @@ class Game:
             200,
             self.mobs,
             self.map.tiles,
+            self.map.slope_tiles,
             map_bounds=map_bounds,
         )
         self.players.add(player)

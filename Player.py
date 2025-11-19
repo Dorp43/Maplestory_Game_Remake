@@ -7,7 +7,7 @@ from entities.HealthBar import HealthBar
 
 
 class Player(pygame.sprite.Sprite):
-    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles, map_bounds=None):
+    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles, slope_tiles=None, map_bounds=None):
         pygame.sprite.Sprite.__init__(self)
         self.alive = True
         self.screen = screen
@@ -21,6 +21,9 @@ class Player(pygame.sprite.Sprite):
         self.mobs = mobs
         # list of pygame.Rect for solid tiles / platforms
         self.tiles = tiles
+        self.slope_tiles = slope_tiles or []
+        self.max_slope_step_up = 60
+        self.max_slope_step_down = 25
         # Map boundaries: (min_x, max_x, min_y, max_y) - None means no boundaries
         self.map_bounds = map_bounds
         self.projectiles_group = pygame.sprite.Group()
@@ -142,6 +145,9 @@ class Player(pygame.sprite.Sprite):
                     self.rect.top = tile.bottom
                     self.vel_y = 0
 
+        if self.slope_tiles:
+            self._handle_slope_collision()
+
         # Clamp player to map boundaries if provided
         if self.map_bounds:
             map_min_x, map_max_x, map_min_y, map_max_y = self.map_bounds
@@ -155,6 +161,54 @@ class Player(pygame.sprite.Sprite):
                 self.rect.bottom = map_max_y
                 self.vel_y = 0
                 self.in_air = False
+
+    def _handle_slope_collision(self):
+        feet_x = self.rect.centerx
+        candidate_y = None
+
+        for slope in self.slope_tiles:
+            rect = slope['rect']
+            if feet_x < rect.left or feet_x >= rect.right:
+                continue
+            if self.rect.bottom < rect.top - self.max_slope_step_up:
+                continue
+            if self.rect.top > rect.bottom:
+                continue
+
+            surface_y = self._get_slope_surface_y(slope, feet_x)
+            if surface_y is None:
+                continue
+
+            vertical_gap = surface_y - self.rect.bottom
+            if -self.max_slope_step_up <= vertical_gap <= self.max_slope_step_down:
+                if candidate_y is None or surface_y < candidate_y:
+                    candidate_y = surface_y
+
+        if candidate_y is not None:
+            self.rect.bottom = candidate_y
+            self.vel_y = 0
+            self.in_air = False
+
+    def _get_slope_surface_y(self, slope, world_x):
+        rect = slope['rect']
+        local_x = int(world_x - rect.left)
+        columns = slope.get('column_tops')
+        if not columns or local_x < 0 or local_x >= len(columns):
+            return None
+
+        if columns[local_x] is not None:
+            return columns[local_x]
+
+        # search nearby columns to smooth out sparse data from the sprite mask
+        max_offset = len(columns)
+        for offset in range(1, max_offset):
+            left_idx = local_x - offset
+            right_idx = local_x + offset
+            if left_idx >= 0 and columns[left_idx] is not None:
+                return columns[left_idx]
+            if right_idx < len(columns) and columns[right_idx] is not None:
+                return columns[right_idx]
+        return None
 
 
     def shoot(self, projectile, isRotate, damage, hit_count):

@@ -7,7 +7,7 @@ FLOOR = 465
 
 
 class Mob(pygame.sprite.Sprite):
-    def __init__(self, screen, players, tiles, mob_name, x, y, scale=1, speed=1, health=150, map_bounds=None):
+    def __init__(self, screen, players, tiles, slope_tiles=None, mob_name=None, x=0, y=0, scale=1, speed=1, health=150, map_bounds=None):
         pygame.sprite.Sprite.__init__(self)
         self.screen = screen
         self.alive = True
@@ -16,6 +16,9 @@ class Mob(pygame.sprite.Sprite):
         self.players = players
         # list of pygame.Rect for solid tiles / platforms
         self.tiles = tiles
+        self.slope_tiles = slope_tiles or []
+        self.max_slope_step_up = 60
+        self.max_slope_step_down = 25
         # Map boundaries: (min_x, max_x, min_y, max_y) - None means no boundaries
         self.map_bounds = map_bounds
         self.direction = -1
@@ -221,6 +224,9 @@ class Mob(pygame.sprite.Sprite):
                     self.rect.top = tile.bottom
                     self.vel_y = 0
 
+        if self.slope_tiles:
+            self._handle_slope_collision()
+
         # Clamp mob to map boundaries if provided
         if self.map_bounds:
             map_min_x, map_max_x, map_min_y, map_max_y = self.map_bounds
@@ -238,6 +244,53 @@ class Mob(pygame.sprite.Sprite):
                 self.rect.bottom = map_max_y
                 self.vel_y = 0
                 self.in_air = False
+
+    def _handle_slope_collision(self):
+        feet_x = self.rect.centerx
+        candidate_y = None
+
+        for slope in self.slope_tiles:
+            rect = slope['rect']
+            if feet_x < rect.left or feet_x >= rect.right:
+                continue
+            if self.rect.bottom < rect.top - self.max_slope_step_up:
+                continue
+            if self.rect.top > rect.bottom:
+                continue
+
+            surface_y = self._get_slope_surface_y(slope, feet_x)
+            if surface_y is None:
+                continue
+
+            vertical_gap = surface_y - self.rect.bottom
+            if -self.max_slope_step_up <= vertical_gap <= self.max_slope_step_down:
+                if candidate_y is None or surface_y < candidate_y:
+                    candidate_y = surface_y
+
+        if candidate_y is not None:
+            self.rect.bottom = candidate_y
+            self.vel_y = 0
+            self.in_air = False
+
+    def _get_slope_surface_y(self, slope, world_x):
+        rect = slope['rect']
+        local_x = int(world_x - rect.left)
+        columns = slope.get('column_tops')
+        if not columns or local_x < 0 or local_x >= len(columns):
+            return None
+
+        if columns[local_x] is not None:
+            return columns[local_x]
+
+        max_offset = len(columns)
+        for offset in range(1, max_offset):
+            left_idx = local_x - offset
+            right_idx = local_x + offset
+            if left_idx >= 0 and columns[left_idx] is not None:
+                return columns[left_idx]
+            if right_idx < len(columns) and columns[right_idx] is not None:
+                return columns[right_idx]
+        return None
 
 
     def update_animation(self):
