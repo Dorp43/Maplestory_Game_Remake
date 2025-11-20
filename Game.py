@@ -74,7 +74,10 @@ class Game:
     def game_loop(self):
         """ Game loop main method """
         while self.run:
-            self.clock.tick(self.fps)
+            dt = self.clock.tick(self.fps)
+            # Update animation time for backgrounds
+            if self.map:
+                self.map.animation_time += dt / 1000.0  # Convert to seconds
             self.draw_bg()
 
             for mob in self.mobs:

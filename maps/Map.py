@@ -18,6 +18,7 @@ class Map:
         self.tile_grid = []
         self.slope_tiles = []
         self.lines = []
+        self.animation_time = 0.0  # Track time for background animations
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(base_dir)
@@ -439,12 +440,16 @@ class Map:
             with open(json_path, "r") as f:
                 data = json.load(f)
                 layers = data.get("layers", [])
-                # Set default repeat to False if not specified (backward compatibility)
+                # Set defaults for backward compatibility
                 for layer in layers:
                     if "repeat" not in layer:
                         layer["repeat"] = False
                     if "x" not in layer and not layer.get("repeat", False):
                         layer["x"] = 0  # Default X for non-repeating
+                    if "animated" not in layer:
+                        layer["animated"] = False
+                    if "animation_speed" not in layer:
+                        layer["animation_speed"] = 20.0
                 self.background_layers = layers
                 # Sort layers by layer_index (lower = drawn first/behind)
                 self.background_layers.sort(key=lambda l: l.get("layer_index", 0))
@@ -469,6 +474,8 @@ class Map:
             y_pos = layer.get("y", 0)
             scroll_speed = layer.get("scroll_speed", 1.0)  # Parallax effect (1.0 = normal, <1.0 = slower)
             repeat = layer.get("repeat", False)  # Default to False (non-repeating)
+            animated = layer.get("animated", False)
+            animation_speed = layer.get("animation_speed", 20.0)
             
             # Calculate scroll offset with parallax
             scroll_x = int(camera_x * scroll_speed)
@@ -480,9 +487,14 @@ class Map:
             if screen_y + img_height >= 0 and screen_y < screen_height:
                 if repeat:
                     # Draw repeating background - cover entire horizontal space
+                    # Calculate animation offset (moves right to left, so negative)
+                    anim_offset = 0
+                    if animated:
+                        anim_offset = int(self.animation_time * animation_speed) % img_width
+                    
                     # Calculate how many times to repeat horizontally
                     # Start from leftmost visible position
-                    start_x = -scroll_x % img_width - img_width
+                    start_x = (-scroll_x - anim_offset) % img_width - img_width
                     # Extend well beyond screen to ensure full coverage
                     end_x = screen_width + img_width * 2
                     

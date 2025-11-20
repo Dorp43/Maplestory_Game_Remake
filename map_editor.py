@@ -459,6 +459,7 @@ def main():
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 20)
+    animation_time = 0  # Track time for animations
 
     camera_x = 0
     camera_y = 0
@@ -491,6 +492,7 @@ def main():
     running = True
     while running:
         dt = clock.tick(60)
+        animation_time += dt / 1000.0  # Convert to seconds
 
         # camera movement (disabled when dragging borders)
         if not dragging_border:
@@ -638,9 +640,47 @@ def main():
                                 current_repeat = bg_layers[closest_idx].get("repeat", False)  # Default to False
                                 bg_layers[closest_idx]["repeat"] = not current_repeat
                                 if not bg_layers[closest_idx]["repeat"]:
-                                    if "x" not in bg_layers[closest_idx]:
-                                        bg_layers[closest_idx]["x"] = camera_x + viewport_width // 2
-                                print(f"[map_editor] Background layer at Y={bg_layers[closest_idx].get('y', 0)} repeat={not current_repeat}")
+                                 if "x" not in bg_layers[closest_idx]:
+                                     bg_layers[closest_idx]["x"] = camera_x + viewport_width // 2
+                                 # If toggling to non-repeating, disable animation
+                                 if not bg_layers[closest_idx]["repeat"]:
+                                     bg_layers[closest_idx]["animated"] = False
+                                 print(f"[map_editor] Background layer at Y={bg_layers[closest_idx].get('y', 0)} repeat={not current_repeat}")
+                elif event.key == pygame.K_a and mode == "backgrounds":
+                    # Toggle animation for closest background layer (only works for repeating)
+                    current_mouse_x, current_mouse_y = pygame.mouse.get_pos()
+                    if viewport_rect.collidepoint(current_mouse_x, current_mouse_y):
+                        world_y = camera_y + current_mouse_y
+                        world_x = camera_x + current_mouse_x
+                        closest_idx = None
+                        closest_dist = 50 ** 2
+                        for i, layer in enumerate(bg_layers):
+                            layer_y = layer.get("y", 0)
+                            layer_x = layer.get("x", 0) if not layer.get("repeat", False) else None
+                            dy = layer_y - world_y
+                            dist_y = dy * dy
+                            
+                            if layer_x is not None:
+                                dx = layer_x - world_x
+                                dist = dx * dx + dist_y
+                            else:
+                                dist = dist_y
+                            
+                            if dist <= closest_dist:
+                                closest_dist = dist
+                                closest_idx = i
+                        
+                        if closest_idx is not None:
+                            layer = bg_layers[closest_idx]
+                            if layer.get("repeat", False):
+                                # Only allow animation for repeating backgrounds
+                                current_animated = layer.get("animated", False)
+                                layer["animated"] = not current_animated
+                                if "animation_speed" not in layer:
+                                    layer["animation_speed"] = 20.0  # Default speed
+                                print(f"[map_editor] Background layer animation={not current_animated} (only works for repeating backgrounds)")
+                            else:
+                                print(f"[map_editor] Animation only works for repeating backgrounds. Toggle repeat first with R.")
                 elif event.key == pygame.K_m and mode == "backgrounds":
                     # Resize map to fit backgrounds perfectly
                     optimal_width = calculate_optimal_map_width(bg_layers, bg_images)
@@ -660,8 +700,52 @@ def main():
                     dragging_border = None
                 elif event.key == pygame.K_t and mode == "lines":
                     line_type = "wall" if line_type == "floor" else "floor"
-                elif event.key in (pygame.K_LEFT, pygame.K_a):
+                elif event.key == pygame.K_a and mode == "backgrounds":
+                    # Toggle animation for closest background layer (only works for repeating)
+                    # This must come before the camera movement handler
+                    current_mouse_x, current_mouse_y = pygame.mouse.get_pos()
+                    if viewport_rect.collidepoint(current_mouse_x, current_mouse_y):
+                        world_y = camera_y + current_mouse_y
+                        world_x = camera_x + current_mouse_x
+                        closest_idx = None
+                        closest_dist = 50 ** 2
+                        for i, layer in enumerate(bg_layers):
+                            layer_y = layer.get("y", 0)
+                            layer_x = layer.get("x", 0) if not layer.get("repeat", False) else None
+                            dy = layer_y - world_y
+                            dist_y = dy * dy
+                            
+                            if layer_x is not None:
+                                dx = layer_x - world_x
+                                dist = dx * dx + dist_y
+                            else:
+                                dist = dist_y
+                            
+                            if dist <= closest_dist:
+                                closest_dist = dist
+                                closest_idx = i
+                        
+                        if closest_idx is not None:
+                            layer = bg_layers[closest_idx]
+                            if layer.get("repeat", False):
+                                # Only allow animation for repeating backgrounds
+                                current_animated = layer.get("animated", False)
+                                layer["animated"] = not current_animated
+                                if "animation_speed" not in layer:
+                                    layer["animation_speed"] = 20.0  # Default speed
+                                print(f"[map_editor] Background layer animation={not current_animated} (only works for repeating backgrounds)")
+                            else:
+                                print(f"[map_editor] Animation only works for repeating backgrounds. Toggle repeat first with R.")
+                        else:
+                            print(f"[map_editor] No background layer found near mouse position")
+                    else:
+                        print(f"[map_editor] Mouse not in viewport")
+                elif event.key == pygame.K_LEFT:
                     move_left = True
+                elif event.key == pygame.K_a:
+                    # A key for camera movement (only if not in backgrounds mode)
+                    if mode != "backgrounds":
+                        move_left = True
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
                     move_right = True
                 elif event.key in (pygame.K_UP, pygame.K_w):
@@ -673,8 +757,11 @@ def main():
                     if 0 <= idx < len(mob_types):
                         current_mob_index = idx
             elif event.type == pygame.KEYUP:
-                if event.key in (pygame.K_LEFT, pygame.K_a):
+                if event.key == pygame.K_LEFT:
                     move_left = False
+                elif event.key == pygame.K_a:
+                    if mode != "backgrounds":  # Only move camera if not in backgrounds mode
+                        move_left = False
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
                     move_right = False
                 elif event.key in (pygame.K_UP, pygame.K_w):
@@ -856,17 +943,21 @@ def main():
                                                 "layer_index": current_layer_index,
                                                 "scroll_speed": existing_layer.get("scroll_speed", 1.0),
                                                 "repeat": existing_layer.get("repeat", False),
-                                                "x": existing_layer.get("x", 0)  # Preserve X for non-repeating
+                                                "x": existing_layer.get("x", 0),  # Preserve X for non-repeating
+                                                "animated": existing_layer.get("animated", False),
+                                                "animation_speed": existing_layer.get("animation_speed", 20.0)
                                             }
                                         else:
-                                            # Add new layer (default: NON-repeating)
+                                            # Add new layer (default: NON-repeating, not animated)
                                             bg_layers.append({
                                                 "background_id": selected_bg_id,
                                                 "y": world_y,
                                                 "layer_index": current_layer_index,
                                                 "scroll_speed": 1.0,
                                                 "repeat": False,  # Default to NON-repeating
-                                                "x": world_x  # X position for non-repeating backgrounds
+                                                "x": world_x,  # X position for non-repeating backgrounds
+                                                "animated": False,  # Default to not animated
+                                                "animation_speed": 20.0  # Pixels per second (for when animated)
                                             })
                             elif event.button == 3:  # Right click - delete layer
                                 closest_idx = None
@@ -1121,6 +1212,8 @@ def main():
             bg_img = bg_img_data['img']
             y_pos = layer.get("y", 0)
             repeat = layer.get("repeat", False)  # Default to False
+            animated = layer.get("animated", False)
+            animation_speed = layer.get("animation_speed", 20.0)
             img_width = bg_img.get_width()
             img_height = bg_img.get_height()
             screen_y = y_pos - camera_y
@@ -1131,9 +1224,16 @@ def main():
                 temp.set_alpha(180)  # Semi-transparent in editor
                 
                 if repeat:
-                    # Draw repeating background horizontally
-                    start_x = -camera_x % img_width - img_width
-                    end_x = viewport_width + img_width
+                    # Draw repeating background horizontally - cover entire viewport
+                    # Calculate animation offset (moves right to left, so negative)
+                    anim_offset = 0
+                    if animated:
+                        anim_offset = int(animation_time * animation_speed) % img_width
+                    
+                    # Calculate how many times to repeat to cover full width
+                    start_x = (-camera_x - anim_offset) % img_width - img_width
+                    # Extend beyond viewport to ensure full coverage
+                    end_x = viewport_width + img_width * 2
                     for x in range(start_x, end_x, img_width):
                         screen.blit(temp, (x, screen_y))
                 else:
@@ -1292,7 +1392,9 @@ def main():
                         delete_text = font.render("RIGHT-CLICK TO DELETE | R = toggle repeat", True, (255, 0, 0))
                         screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
                         layer_idx = layer.get("layer_index", 0)
-                        repeat_text = font.render(f"REPEAT: {repeat} (R = toggle) | INDEX: {layer_idx} (+/- = change)", True, (200, 200, 0))
+                        animated = layer.get("animated", False)
+                        anim_text = f" | ANIMATED: {animated} (A = toggle)" if repeat else ""
+                        repeat_text = font.render(f"REPEAT: {repeat} (R = toggle) | INDEX: {layer_idx} (+/- = change){anim_text}", True, (200, 200, 0))
                         screen.blit(repeat_text, (viewport_width // 2 - repeat_text.get_width() // 2, screen_layer_y + 5))
                     else:
                         pygame.draw.line(screen, (100, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
@@ -1306,7 +1408,9 @@ def main():
                             # Highlight if close to mouse
                             pygame.draw.line(screen, (255, 200, 0), (screen_layer_x, screen_layer_y - 20), (screen_layer_x, screen_layer_y + img_height + 20), 3)
                             layer_idx = layer.get("layer_index", 0)
-                            drag_text = font.render(f"LEFT-CLICK & DRAG TO MOVE | R = toggle repeat | INDEX: {layer_idx} (+/- = change)", True, (255, 200, 0))
+                            animated = layer.get("animated", False)
+                            anim_text = f" | ANIMATED: {animated} (A = toggle)" if layer.get("repeat", False) else ""
+                            drag_text = font.render(f"LEFT-CLICK & DRAG TO MOVE | R = toggle repeat | INDEX: {layer_idx} (+/- = change){anim_text}", True, (255, 200, 0))
                             screen.blit(drag_text, (screen_layer_x - drag_text.get_width() // 2, screen_layer_y - 35))
                         else:
                             pygame.draw.line(screen, (150, 100, 100), (screen_layer_x, screen_layer_y - 10), (screen_layer_x, screen_layer_y + img_height + 10), 2)
@@ -1432,7 +1536,7 @@ def main():
             "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
             f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
             f"Lines: Left click = start/end line (auto-connects), Right click = cancel/delete, T = toggle type ({line_type})",
-            f"Backgrounds: Left click = place, Left click & drag = move (non-repeating), Right click = delete, R = toggle repeat, +/- = layer index ({current_layer_index}), M = resize map",
+            f"Backgrounds: Left click = place, Left click & drag = move (non-repeating), Right click = delete, R = toggle repeat, A = toggle animation (repeating only), +/- = layer index ({current_layer_index}), M = resize map",
             f"Spawn: Left click = set spawn point (current: {spawn_point['x']}, {spawn_point['y']})",
             "Map Resize: In tiles mode, drag map borders (highlighted in yellow) to resize",
             "S = save tiles, mobs, lines, backgrounds & spawn, ESC/Q = quit",
