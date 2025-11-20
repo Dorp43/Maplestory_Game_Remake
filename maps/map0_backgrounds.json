@@ -36,7 +36,8 @@
       "repeat": true,
       "x": 2277,
       "animated": true,
-      "animation_speed": 20.0
+      "animation_speed": 20.0,
+      "start_y": 305
     },
     {
       "background_id": 4,
@@ -46,5 +47,6 @@
       "repeat": false,
       "x": 968
     }
-  ]
+  ],
+  "global_start_y": 317
 }

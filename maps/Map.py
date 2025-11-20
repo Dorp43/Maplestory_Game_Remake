@@ -33,6 +33,8 @@ class Map:
         self.background_defs = self.load_background_manifest()
         self.background_images = self.load_background_images()
         self.background_layers = []
+        self.global_bg_start_y = None  # Global top boundary for all backgrounds
+        self.global_bg_end_y = None  # Global bottom boundary for all backgrounds
         self.spawn_point = {"x": 400, "y": 200}  # Default spawn
         self.set_map(map_id)
 
@@ -451,6 +453,9 @@ class Map:
                     if "animation_speed" not in layer:
                         layer["animation_speed"] = 20.0
                 self.background_layers = layers
+                # Load global bounds
+                self.global_bg_start_y = data.get("global_start_y", None)
+                self.global_bg_end_y = data.get("global_end_y", None)
                 # Sort layers by layer_index (lower = drawn first/behind)
                 self.background_layers.sort(key=lambda l: l.get("layer_index", 0))
         except Exception as e:
@@ -460,6 +465,14 @@ class Map:
         """Draw all background layers with optional horizontal repeating."""
         screen_width = surface.get_width()
         screen_height = surface.get_height()
+        
+        # If global bounds are set, backgrounds MUST fill the entire screen - no exceptions
+        has_global_bounds = self.global_bg_start_y is not None and self.global_bg_end_y is not None
+        
+        # If we have global bounds, we MUST have at least one background to fill the screen
+        if has_global_bounds and len(self.background_layers) == 0:
+            # No backgrounds to draw - this will show white space
+            return
         
         for layer in self.background_layers:
             bg_id = layer.get("background_id", 0)
@@ -481,10 +494,77 @@ class Map:
             scroll_x = int(camera_x * scroll_speed)
             img_width = bg_img.get_width()
             img_height = bg_img.get_height()
+            
+            # If global bounds are set, ALWAYS stretch backgrounds to fill the ENTIRE screen
+            # This ensures NO white space anywhere, regardless of camera position
+            if has_global_bounds:
+                # Stretch the background to fill the ENTIRE screen height
+                # Use convert() to ensure no transparency issues
+                stretched_img = pygame.transform.scale(bg_img, (img_width, screen_height))
+                if stretched_img.get_flags() & pygame.SRCALPHA:
+                    # Convert to non-alpha surface to ensure solid fill
+                    solid_surf = pygame.Surface((img_width, screen_height))
+                    solid_surf.blit(stretched_img, (0, 0))
+                    stretched_img = solid_surf
+                
+                # ALWAYS draw from top of screen (0) to bottom of screen - NO EXCEPTIONS
+                # Draw to fill the ENTIRE screen, covering every single pixel
+                if repeat:
+                    # Draw repeating background - cover entire horizontal AND vertical space
+                    anim_offset = 0
+                    if animated:
+                        anim_offset = int(self.animation_time * animation_speed) % img_width
+                    
+                    # Calculate start position to ensure full coverage - start well before screen
+                    base_x = (-scroll_x - anim_offset) % img_width
+                    start_x = base_x - img_width * 2  # Start 2 images before screen
+                    # Extend well beyond screen to ensure complete coverage
+                    end_x = screen_width + img_width * 3
+                    
+                    # Draw repeating stretched background covering full screen height
+                    # Make absolutely sure we cover the entire width with no gaps
+                    for x in range(start_x, end_x, img_width):
+                        # Draw the full stretched image from top (0) to bottom (screen_height)
+                        # No conditions - always draw to fill screen
+                        surface.blit(stretched_img, (x, 0))
+                else:
+                    # For non-repeating backgrounds, TILE them horizontally to cover full width
+                    # This ensures no white gaps on the sides
+                    x_pos = layer.get("x", 0)
+                    screen_x = x_pos - scroll_x
+                    
+                    # Tile horizontally to cover ENTIRE screen width - no gaps allowed
+                    # Calculate proper tiling to ensure full coverage
+                    # Start from well before screen edge (at least 2 images before)
+                    base_offset = int(screen_x) % img_width
+                    start_x = -base_offset - img_width * 2
+                    # Extend well beyond screen edge
+                    end_x = screen_width + img_width * 3
+                    
+                    # Draw tiled instances covering full screen
+                    for x in range(start_x, end_x, img_width):
+                        # Draw the full stretched image from top (0) to bottom (screen_height)
+                        # No conditions - always draw to fill screen
+                        surface.blit(stretched_img, (x, 0))
+                continue  # Skip the normal drawing code
+            
+            # Normal drawing (no global bounds or only one bound set)
             screen_y = y_pos - camera_y
             
-            # Only draw if layer is visible on screen vertically
-            if screen_y + img_height >= 0 and screen_y < screen_height:
+            # Clip background vertically if global bounds are set
+            clip_top = 0
+            clip_bottom = img_height
+            if self.global_bg_start_y is not None:
+                # Clip top if background starts above the boundary
+                if y_pos < self.global_bg_start_y:
+                    clip_top = self.global_bg_start_y - y_pos
+            if self.global_bg_end_y is not None:
+                # Clip bottom if background extends below the boundary
+                if y_pos + img_height > self.global_bg_end_y:
+                    clip_bottom = self.global_bg_end_y - y_pos
+            
+            # Only draw if layer is visible on screen vertically and within bounds
+            if screen_y + clip_bottom >= 0 and screen_y + clip_top < screen_height and clip_bottom > clip_top:
                 if repeat:
                     # Draw repeating background - cover entire horizontal space
                     # Calculate animation offset (moves right to left, so negative)
@@ -498,16 +578,28 @@ class Map:
                     # Extend well beyond screen to ensure full coverage
                     end_x = screen_width + img_width * 2
                     
-                    # Draw repeating background
+                    # Draw repeating background with vertical clipping
                     for x in range(start_x, end_x, img_width):
-                        surface.blit(bg_img, (x, screen_y))
+                        if clip_top > 0 or clip_bottom < img_height:
+                            # Create a clipped surface
+                            clipped_surf = pygame.Surface((img_width, clip_bottom - clip_top), pygame.SRCALPHA)
+                            clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, clip_bottom - clip_top))
+                            surface.blit(clipped_surf, (x, screen_y + clip_top))
+                        else:
+                            surface.blit(bg_img, (x, screen_y))
                 else:
-                    # Draw single instance (no repeating)
+                    # Draw single instance (no repeating) with vertical clipping
                     x_pos = layer.get("x", 0)  # X position for non-repeating backgrounds
                     screen_x = x_pos - scroll_x
                     # Only draw if visible on screen
                     if screen_x + img_width >= 0 and screen_x < screen_width:
-                        surface.blit(bg_img, (screen_x, screen_y))
+                        if clip_top > 0 or clip_bottom < img_height:
+                            # Create a clipped surface
+                            clipped_surf = pygame.Surface((img_width, clip_bottom - clip_top), pygame.SRCALPHA)
+                            clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, clip_bottom - clip_top))
+                            surface.blit(clipped_surf, (screen_x, screen_y + clip_top))
+                        else:
+                            surface.blit(bg_img, (screen_x, screen_y))
 
     def load_spawn_from_json(self, map_id: int):
         """Load spawn point from map{id}_spawn.json."""

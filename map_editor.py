@@ -308,21 +308,29 @@ def load_background_images(base_dir: str, bg_entries):
 
 def load_backgrounds(json_path: str):
     if not os.path.exists(json_path):
-        return []
+        return [], None, None  # layers, global_start_y, global_end_y
     try:
         with open(json_path, "r") as f:
             data = json.load(f)
-            return data.get("layers", [])
+            layers = data.get("layers", [])
+            global_start_y = data.get("global_start_y", None)
+            global_end_y = data.get("global_end_y", None)
+            return layers, global_start_y, global_end_y
     except Exception as e:
         print(f"Error loading backgrounds: {e}")
-        return []
+        return [], None, None
 
 
-def save_backgrounds(json_path: str, layers):
+def save_backgrounds(json_path: str, layers, global_start_y=None, global_end_y=None):
     try:
         os.makedirs(os.path.dirname(json_path), exist_ok=True)
+        data = {"layers": layers}
+        if global_start_y is not None:
+            data["global_start_y"] = global_start_y
+        if global_end_y is not None:
+            data["global_end_y"] = global_end_y
         with open(json_path, "w") as f:
-            json.dump({"layers": layers}, f, indent=2)
+            json.dump(data, f, indent=2)
         print(f"[map_editor] Saved backgrounds to {json_path}")
     except Exception as e:
         print(f"Error saving backgrounds: {e}")
@@ -454,7 +462,7 @@ def main():
     grid = load_or_create_grid(tiles_csv_path, GRID_COLS, GRID_ROWS)
     mobs = load_mobs(mobs_csv_path)
     lines = load_lines(lines_json_path)
-    bg_layers = load_backgrounds(backgrounds_json_path)
+    bg_layers, global_bg_start_y, global_bg_end_y = load_backgrounds(backgrounds_json_path)
     spawn_point = load_spawn(spawn_json_path)
 
     clock = pygame.time.Clock()
@@ -468,7 +476,7 @@ def main():
     palette_scroll = 0
     selected_tile_id = 0
     selected_bg_id = 0
-    mode = "tiles"  # tiles, mobs, lines, backgrounds, spawn
+    mode = "tiles"  # tiles, mobs, lines, backgrounds, spawn, background_bounds
     current_mob_index = 0
     current_layer_index = 0  # Z-order for backgrounds (lower = behind)
     
@@ -476,6 +484,9 @@ def main():
     dragging_background = None  # Index of background being dragged, or None
     drag_bg_start_pos = None  # (world_x, world_y) when drag started
     drag_bg_start_layer_pos = None  # (x, y) of layer when drag started
+    
+    # Global background boundary line dragging state
+    dragging_boundary_line = None  # "start" or "end" or None (global bounds for all backgrounds)
     
     # Border dragging state
     dragging_border = None  # "left", "right", "top", "bottom", or None
@@ -524,7 +535,7 @@ def main():
                     save_grid(tiles_csv_path, grid)
                     save_mobs(mobs_csv_path, mobs)
                     save_lines(lines_json_path, lines)
-                    save_backgrounds(backgrounds_json_path, bg_layers)
+                    save_backgrounds(backgrounds_json_path, bg_layers, global_bg_start_y, global_bg_end_y)
                     save_spawn(spawn_json_path, spawn_point)
                 elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                     if mode == "backgrounds":
@@ -695,9 +706,17 @@ def main():
                     elif mode == "mobs": mode = "lines"
                     elif mode == "lines": mode = "backgrounds"
                     elif mode == "backgrounds": mode = "spawn"
+                    elif mode == "spawn": mode = "background_bounds"
+                    elif mode == "background_bounds": mode = "tiles"
                     else: mode = "tiles"
                     line_start_point = None
                     dragging_border = None
+                    dragging_boundary_line = None
+                elif event.key == pygame.K_c and (mode == "backgrounds" or mode == "background_bounds"):
+                    # Clear global bounds
+                    global_bg_start_y = None
+                    global_bg_end_y = None
+                    print(f"[map_editor] Cleared global background bounds")
                 elif event.key == pygame.K_t and mode == "lines":
                     line_type = "wall" if line_type == "floor" else "floor"
                 elif event.key == pygame.K_a and mode == "backgrounds":
@@ -771,7 +790,7 @@ def main():
             elif event.type == pygame.MOUSEWHEEL:
                 if palette_rect.collidepoint(mouse_x, mouse_y):
                     palette_scroll -= event.y * 30
-                    if mode == "backgrounds":
+                    if mode == "backgrounds" or mode == "background_bounds":
                         max_scroll = max(0, len(bg_entries) * PALETTE_ENTRY_HEIGHT - WINDOW_HEIGHT + 40)
                     else:
                         max_scroll = max(0, len(tile_entries) * PALETTE_ENTRY_HEIGHT - WINDOW_HEIGHT + 40)
@@ -896,65 +915,117 @@ def main():
                                     
                                     if closest_line_idx is not None:
                                         lines.pop(closest_line_idx)
-                        elif mode == "backgrounds":
-                            if event.button == 1:  # Left click - place or drag background layer
-                                if selected_bg_id != 0:
-                                    # Check if clicking on existing background layer to drag it
-                                    closest_idx = None
-                                    closest_dist = 30 ** 2  # 30 pixel threshold for clicking
+                        elif mode == "backgrounds" or mode == "background_bounds":
+                            if event.button == 1:  # Left click - check for global boundary line or background
+                                # First check if clicking near global boundary lines
+                                boundary_clicked = False
+                                BOUNDARY_LINE_THRESHOLD = 15  # pixels
+                                
+                                # Check existing global start_y line
+                                if global_bg_start_y is not None:
+                                    screen_start_y = global_bg_start_y - camera_y
+                                    if abs(event.pos[1] - screen_start_y) < BOUNDARY_LINE_THRESHOLD:
+                                        dragging_boundary_line = "start"
+                                        boundary_clicked = True
+                                
+                                # Check existing global end_y line
+                                if not boundary_clicked and global_bg_end_y is not None:
+                                    screen_end_y = global_bg_end_y - camera_y
+                                    if abs(event.pos[1] - screen_end_y) < BOUNDARY_LINE_THRESHOLD:
+                                        dragging_boundary_line = "end"
+                                        boundary_clicked = True
+                                
+                                # Check if clicking near top or bottom of any background (to create global bounds)
+                                if not boundary_clicked:
                                     for i, layer in enumerate(bg_layers):
+                                        bg_id = layer.get("background_id", 0)
+                                        if bg_id == 0:
+                                            continue
+                                        
                                         layer_y = layer.get("y", 0)
-                                        layer_x = layer.get("x", 0) if not layer.get("repeat", False) else None
-                                        dy = layer_y - world_y
-                                        dist_y = dy * dy
+                                        bg_img_data = bg_images.get(bg_id)
+                                        if not bg_img_data:
+                                            continue
                                         
-                                        # For non-repeating, also check X distance
-                                        if layer_x is not None:
-                                            dx = layer_x - world_x
-                                            dist = dx * dx + dist_y
-                                        else:
-                                            # For repeating, only check Y
-                                            dist = dist_y
+                                        bg_img = bg_img_data['img']
+                                        img_height = bg_img.get_height()
+                                        screen_layer_y = layer_y - camera_y
+                                        screen_layer_top = screen_layer_y
+                                        screen_layer_bottom = screen_layer_y + img_height
                                         
-                                        if dist <= closest_dist:
-                                            closest_dist = dist
-                                            closest_idx = i
-                                    
-                                    if closest_idx is not None:
-                                        # Start dragging existing background
-                                        dragging_background = closest_idx
-                                        drag_bg_start_pos = (world_x, world_y)
-                                        layer = bg_layers[closest_idx]
-                                        drag_bg_start_layer_pos = (layer.get("x", 0), layer.get("y", 0))
-                                    else:
-                                        # Check if layer already exists at this Y position (for repeating backgrounds)
-                                        existing_idx = None
+                                        # Check if clicking near top of background (to create global start_y)
+                                        if global_bg_start_y is None and abs(event.pos[1] - screen_layer_top) < BOUNDARY_LINE_THRESHOLD:
+                                            global_bg_start_y = layer_y
+                                            dragging_boundary_line = "start"
+                                            boundary_clicked = True
+                                            break
+                                        
+                                        # Check if clicking near bottom of background (to create global end_y)
+                                        if global_bg_end_y is None and abs(event.pos[1] - screen_layer_bottom) < BOUNDARY_LINE_THRESHOLD:
+                                            global_bg_end_y = layer_y + img_height
+                                            dragging_boundary_line = "end"
+                                            boundary_clicked = True
+                                            break
+                                
+                                # If not clicking on boundary line, handle background placement/dragging
+                                if not boundary_clicked:
+                                    if selected_bg_id != 0:
+                                        # Check if clicking on existing background layer to drag it
+                                        closest_idx = None
+                                        closest_dist = 30 ** 2  # 30 pixel threshold for clicking
                                         for i, layer in enumerate(bg_layers):
-                                            if layer.get("repeat", False) and abs(layer.get("y", 0) - world_y) < 10:
-                                                existing_idx = i
-                                                break
+                                            layer_y = layer.get("y", 0)
+                                            layer_x = layer.get("x", 0) if not layer.get("repeat", False) else None
+                                            dy = layer_y - world_y
+                                            dist_y = dy * dy
+                                            
+                                            # For non-repeating, also check X distance
+                                            if layer_x is not None:
+                                                dx = layer_x - world_x
+                                                dist = dx * dx + dist_y
+                                            else:
+                                                # For repeating, only check Y
+                                                dist = dist_y
+                                            
+                                            if dist <= closest_dist:
+                                                closest_dist = dist
+                                                closest_idx = i
                                         
-                                        if existing_idx is not None:
-                                            # Update existing layer
-                                            existing_layer = bg_layers[existing_idx]
-                                            bg_layers[existing_idx] = {
-                                                "background_id": selected_bg_id,
-                                                "y": world_y,
-                                                "layer_index": current_layer_index,
-                                                "scroll_speed": existing_layer.get("scroll_speed", 1.0),
-                                                "repeat": existing_layer.get("repeat", False),
-                                                "x": existing_layer.get("x", 0),  # Preserve X for non-repeating
-                                                "animated": existing_layer.get("animated", False),
-                                                "animation_speed": existing_layer.get("animation_speed", 20.0)
-                                            }
+                                        if closest_idx is not None:
+                                            # Start dragging existing background
+                                            dragging_background = closest_idx
+                                            drag_bg_start_pos = (world_x, world_y)
+                                            layer = bg_layers[closest_idx]
+                                            drag_bg_start_layer_pos = (layer.get("x", 0), layer.get("y", 0))
                                         else:
-                                            # Add new layer (default: NON-repeating, not animated)
-                                            bg_layers.append({
-                                                "background_id": selected_bg_id,
-                                                "y": world_y,
-                                                "layer_index": current_layer_index,
-                                                "scroll_speed": 1.0,
-                                                "repeat": False,  # Default to NON-repeating
+                                            # Check if layer already exists at this Y position (for repeating backgrounds)
+                                            existing_idx = None
+                                            for i, layer in enumerate(bg_layers):
+                                                if layer.get("repeat", False) and abs(layer.get("y", 0) - world_y) < 10:
+                                                    existing_idx = i
+                                                    break
+                                            
+                                            if existing_idx is not None:
+                                                # Update existing layer
+                                                existing_layer = bg_layers[existing_idx]
+                                                bg_layers[existing_idx] = {
+                                                    "background_id": selected_bg_id,
+                                                    "y": world_y,
+                                                    "layer_index": current_layer_index,
+                                                    "scroll_speed": existing_layer.get("scroll_speed", 1.0),
+                                                    "repeat": existing_layer.get("repeat", False),
+                                                    "x": existing_layer.get("x", 0),  # Preserve X for non-repeating
+                                                    "animated": existing_layer.get("animated", False),
+                                                    "animation_speed": existing_layer.get("animation_speed", 20.0)
+                                                }
+                                            else:
+                                                # Add new layer (default: NON-repeating, not animated)
+                                                bg_layers.append({
+                                                    "background_id": selected_bg_id,
+                                                    "y": world_y,
+                                                    "layer_index": current_layer_index,
+                                                    "scroll_speed": 1.0,
+                                                    "repeat": False,  # Default to NON-repeating
                                                 "x": world_x,  # X position for non-repeating backgrounds
                                                 "animated": False,  # Default to not animated
                                                 "animation_speed": 20.0  # Pixels per second (for when animated)
@@ -988,6 +1059,7 @@ def main():
                     dragging_background = None
                     drag_bg_start_pos = None
                     drag_bg_start_layer_pos = None
+                    dragging_boundary_line = None
             elif event.type == pygame.MOUSEMOTION:
                 # Calculate world coordinates for mouse
                 if viewport_rect.collidepoint(event.pos):
@@ -996,6 +1068,13 @@ def main():
                 else:
                     world_mouse_x = None
                     world_mouse_y = None
+                
+                # Handle global boundary line dragging
+                if dragging_boundary_line is not None and world_mouse_y is not None:
+                    if dragging_boundary_line == "start":
+                        global_bg_start_y = world_mouse_y
+                    elif dragging_boundary_line == "end":
+                        global_bg_end_y = world_mouse_y
                 
                 # Handle background dragging
                 if dragging_background is not None and drag_bg_start_pos is not None and drag_bg_start_layer_pos is not None and world_mouse_x is not None:
@@ -1216,10 +1295,72 @@ def main():
             animation_speed = layer.get("animation_speed", 20.0)
             img_width = bg_img.get_width()
             img_height = bg_img.get_height()
+            
+            # If global bounds are set, stretch backgrounds to fill the ENTIRE screen height
+            if global_bg_start_y is not None and global_bg_end_y is not None:
+                # Stretch the background to fill the ENTIRE screen height (not just between boundaries)
+                # This ensures NO white space anywhere
+                stretched_img = pygame.transform.scale(bg_img, (img_width, WINDOW_HEIGHT))
+                temp = stretched_img.copy()
+                temp.set_alpha(180)  # Semi-transparent in editor
+                
+                # ALWAYS draw from top of screen (0) to bottom of screen
+                # Draw to fill the ENTIRE screen, covering every single pixel
+                if repeat:
+                    # Draw repeating background horizontally - cover entire viewport
+                    anim_offset = 0
+                    if animated:
+                        anim_offset = int(animation_time * animation_speed) % img_width
+                    
+                    # Calculate start position to ensure full coverage - start well before viewport
+                    base_x = (-camera_x - anim_offset) % img_width
+                    start_x = base_x - img_width * 2  # Start 2 images before viewport
+                    # Extend well beyond viewport to ensure complete coverage
+                    end_x = viewport_width + img_width * 3
+                    
+                    # Draw repeating stretched background covering full screen height
+                    # Make absolutely sure we cover the entire width with no gaps
+                    for x in range(start_x, end_x, img_width):
+                        # Draw the full stretched image from top (0) to bottom (WINDOW_HEIGHT)
+                        # No conditions - always draw to fill screen
+                        screen.blit(temp, (x, 0))
+                else:
+                    # For non-repeating backgrounds, TILE them horizontally to cover full width
+                    # This ensures no white gaps on the sides
+                    x_pos = layer.get("x", 0)
+                    screen_x = x_pos - camera_x
+                    
+                    # Tile horizontally to cover ENTIRE viewport width - no gaps allowed
+                    # Calculate proper tiling to ensure full coverage
+                    # Start from well before viewport edge (at least 2 images before)
+                    base_offset = int(screen_x) % img_width
+                    start_x = -base_offset - img_width * 2
+                    # Extend well beyond viewport edge
+                    end_x = viewport_width + img_width * 3
+                    
+                    # Draw tiled instances covering full screen
+                    for x in range(start_x, end_x, img_width):
+                        # Draw the full stretched image from top (0) to bottom (WINDOW_HEIGHT)
+                        # No conditions - always draw to fill screen
+                        screen.blit(temp, (x, 0))
+                continue  # Skip the normal drawing code
+            
+            # Normal drawing (no global bounds or only one bound set)
             screen_y = y_pos - camera_y
             
-            # Only draw if visible vertically
-            if screen_y + img_height >= 0 and screen_y < WINDOW_HEIGHT:
+            # Check if layer should be drawn based on global vertical bounds
+            # In editor, we still show it but with visual indicators
+            clip_top = 0
+            clip_bottom = img_height
+            if global_bg_start_y is not None:
+                if y_pos < global_bg_start_y:
+                    clip_top = global_bg_start_y - y_pos
+            if global_bg_end_y is not None:
+                if y_pos + img_height > global_bg_end_y:
+                    clip_bottom = global_bg_end_y - y_pos
+            
+            # Only draw if visible vertically and within bounds
+            if screen_y + clip_bottom >= 0 and screen_y + clip_top < WINDOW_HEIGHT and clip_bottom > clip_top:
                 temp = bg_img.copy()
                 temp.set_alpha(180)  # Semi-transparent in editor
                 
@@ -1235,119 +1376,137 @@ def main():
                     # Extend beyond viewport to ensure full coverage
                     end_x = viewport_width + img_width * 2
                     for x in range(start_x, end_x, img_width):
-                        screen.blit(temp, (x, screen_y))
+                        if clip_top > 0 or clip_bottom < img_height:
+                            # Draw with vertical clipping
+                            clipped_surf = pygame.Surface((img_width, clip_bottom - clip_top), pygame.SRCALPHA)
+                            clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, clip_bottom - clip_top))
+                            clipped_surf.set_alpha(180)
+                            screen.blit(clipped_surf, (x, screen_y + clip_top))
+                        else:
+                            screen.blit(temp, (x, screen_y))
                 else:
                     # Draw single instance (non-repeating)
                     x_pos = layer.get("x", 0)
                     screen_x = x_pos - camera_x
                     if screen_x + img_width >= 0 and screen_x < viewport_width:
-                        screen.blit(temp, (screen_x, screen_y))
+                        if clip_top > 0 or clip_bottom < img_height:
+                            # Draw with vertical clipping
+                            clipped_surf = pygame.Surface((img_width, clip_bottom - clip_top), pygame.SRCALPHA)
+                            clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, clip_bottom - clip_top))
+                            clipped_surf.set_alpha(180)
+                            screen.blit(clipped_surf, (screen_x, screen_y + clip_top))
+                        else:
+                            screen.blit(temp, (screen_x, screen_y))
 
-        # draw tiles (only visible region)
-        actual_cols = len(grid[0]) if grid else GRID_COLS
-        actual_rows = len(grid) if grid else GRID_ROWS
-        start_col = max(0, int(camera_x // TILE_WIDTH))
-        end_col = min(actual_cols, int(math.ceil((camera_x + viewport_width) / TILE_WIDTH)))
-        start_row = max(0, int(camera_y // TILE_HEIGHT))
-        end_row = min(actual_rows, int(math.ceil((camera_y + WINDOW_HEIGHT) / TILE_HEIGHT)))
+        # draw tiles (only visible region) - skip in background_bounds mode
+        if mode != "background_bounds":
+            actual_cols = len(grid[0]) if grid else GRID_COLS
+            actual_rows = len(grid) if grid else GRID_ROWS
+            start_col = max(0, int(camera_x // TILE_WIDTH))
+            end_col = min(actual_cols, int(math.ceil((camera_x + viewport_width) / TILE_WIDTH)))
+            start_row = max(0, int(camera_y // TILE_HEIGHT))
+            end_row = min(actual_rows, int(math.ceil((camera_y + WINDOW_HEIGHT) / TILE_HEIGHT)))
 
-        for row in range(start_row, end_row):
-            for col in range(start_col, end_col):
-                tile_id = grid[row][col]
-                if tile_id == 0:
-                    continue
-                img_data = tile_images.get(tile_id)
-                if img_data is None:
-                    continue
-                screen_x = col * TILE_WIDTH - camera_x
-                screen_y = row * TILE_HEIGHT - camera_y
-                # Blit directly without clipping to allow overflow for taller/wider tiles
-                screen.blit(img_data['img'], (screen_x + img_data['grid_ox'], screen_y + img_data['grid_oy']))
+            for row in range(start_row, end_row):
+                for col in range(start_col, end_col):
+                    tile_id = grid[row][col]
+                    if tile_id == 0:
+                        continue
+                    img_data = tile_images.get(tile_id)
+                    if img_data is None:
+                        continue
+                    screen_x = col * TILE_WIDTH - camera_x
+                    screen_y = row * TILE_HEIGHT - camera_y
+                    # Blit directly without clipping to allow overflow for taller/wider tiles
+                    screen.blit(img_data['img'], (screen_x + img_data['grid_ox'], screen_y + img_data['grid_oy']))
 
-        # Draw map borders (highlighted when hoverable)
-        actual_cols = len(grid[0]) if grid else GRID_COLS
-        actual_rows = len(grid) if grid else GRID_ROWS
-        map_right = actual_cols * TILE_WIDTH
-        map_bottom = actual_rows * TILE_HEIGHT
+        # Draw map borders (highlighted when hoverable) - skip in background_bounds mode
+        if mode != "background_bounds":
+            actual_cols = len(grid[0]) if grid else GRID_COLS
+            actual_rows = len(grid) if grid else GRID_ROWS
+            map_right = actual_cols * TILE_WIDTH
+            map_bottom = actual_rows * TILE_HEIGHT
+            
+            BORDER_THRESHOLD = 20
+            border_color = (255, 200, 0, 180)  # Orange/yellow for borders
+            
+            # Check if mouse is near borders (for highlighting)
+            world_mouse_x = camera_x + mouse_x if viewport_rect.collidepoint(mouse_x, mouse_y) else None
+            world_mouse_y = camera_y + mouse_y if viewport_rect.collidepoint(mouse_x, mouse_y) else None
+            
+            if world_mouse_x is not None and world_mouse_y is not None and mode == "tiles":
+                # Left border
+                if abs(world_mouse_x) < BORDER_THRESHOLD:
+                    pygame.draw.line(screen, (255, 200, 0), (0 - camera_x, 0), (0 - camera_x, WINDOW_HEIGHT), 4)
+                # Right border
+                if abs(world_mouse_x - map_right) < BORDER_THRESHOLD:
+                    pygame.draw.line(screen, (255, 200, 0), (map_right - camera_x, 0), (map_right - camera_x, WINDOW_HEIGHT), 4)
+                # Top border
+                if abs(world_mouse_y) < BORDER_THRESHOLD:
+                    pygame.draw.line(screen, (255, 200, 0), (0, 0 - camera_y), (viewport_width, 0 - camera_y), 4)
+                # Bottom border
+                if abs(world_mouse_y - map_bottom) < BORDER_THRESHOLD:
+                    pygame.draw.line(screen, (255, 200, 0), (0, map_bottom - camera_y), (viewport_width, map_bottom - camera_y), 4)
         
-        BORDER_THRESHOLD = 20
-        border_color = (255, 200, 0, 180)  # Orange/yellow for borders
-        
-        # Check if mouse is near borders (for highlighting)
-        world_mouse_x = camera_x + mouse_x if viewport_rect.collidepoint(mouse_x, mouse_y) else None
-        world_mouse_y = camera_y + mouse_y if viewport_rect.collidepoint(mouse_x, mouse_y) else None
-        
-        if world_mouse_x is not None and world_mouse_y is not None and mode == "tiles":
-            # Left border
-            if abs(world_mouse_x) < BORDER_THRESHOLD:
-                pygame.draw.line(screen, (255, 200, 0), (0 - camera_x, 0), (0 - camera_x, WINDOW_HEIGHT), 4)
-            # Right border
-            if abs(world_mouse_x - map_right) < BORDER_THRESHOLD:
-                pygame.draw.line(screen, (255, 200, 0), (map_right - camera_x, 0), (map_right - camera_x, WINDOW_HEIGHT), 4)
-            # Top border
-            if abs(world_mouse_y) < BORDER_THRESHOLD:
-                pygame.draw.line(screen, (255, 200, 0), (0, 0 - camera_y), (viewport_width, 0 - camera_y), 4)
-            # Bottom border
-            if abs(world_mouse_y - map_bottom) < BORDER_THRESHOLD:
-                pygame.draw.line(screen, (255, 200, 0), (0, map_bottom - camera_y), (viewport_width, map_bottom - camera_y), 4)
-        
-        # Draw border outlines (subtle)
-        border_alpha = 100
-        border_color_rgb = (255, 200, 0)
-        # Left border (only if visible)
-        if -camera_x < viewport_width:
-            border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
-            pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (max(0, 0 - camera_x), 0), (max(0, 0 - camera_x), WINDOW_HEIGHT), 2)
-            screen.blit(border_surf, (0, 0))
-        # Right border (only if visible)
-        if map_right - camera_x > 0:
-            border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
-            right_x = min(viewport_width, map_right - camera_x)
-            pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (right_x, 0), (right_x, WINDOW_HEIGHT), 2)
-            screen.blit(border_surf, (0, 0))
-        # Top border (only if visible)
-        if -camera_y < WINDOW_HEIGHT:
-            border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
-            pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (0, max(0, 0 - camera_y)), (viewport_width, max(0, 0 - camera_y)), 2)
-            screen.blit(border_surf, (0, 0))
-        # Bottom border (only if visible)
-        if map_bottom - camera_y > 0:
-            border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
-            bottom_y = min(WINDOW_HEIGHT, map_bottom - camera_y)
-            pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (0, bottom_y), (viewport_width, bottom_y), 2)
-            screen.blit(border_surf, (0, 0))
+        # Draw border outlines (subtle) - skip in background_bounds mode
+        if mode != "background_bounds":
+            border_alpha = 100
+            border_color_rgb = (255, 200, 0)
+            # Left border (only if visible)
+            if -camera_x < viewport_width:
+                border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
+                pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (max(0, 0 - camera_x), 0), (max(0, 0 - camera_x), WINDOW_HEIGHT), 2)
+                screen.blit(border_surf, (0, 0))
+            # Right border (only if visible)
+            if map_right - camera_x > 0:
+                border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
+                right_x = min(viewport_width, map_right - camera_x)
+                pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (right_x, 0), (right_x, WINDOW_HEIGHT), 2)
+                screen.blit(border_surf, (0, 0))
+            # Top border (only if visible)
+            if -camera_y < WINDOW_HEIGHT:
+                border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
+                pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (0, max(0, 0 - camera_y)), (viewport_width, max(0, 0 - camera_y)), 2)
+                screen.blit(border_surf, (0, 0))
+            # Bottom border (only if visible)
+            if map_bottom - camera_y > 0:
+                border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
+                bottom_y = min(WINDOW_HEIGHT, map_bottom - camera_y)
+                pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (0, bottom_y), (viewport_width, bottom_y), 2)
+                screen.blit(border_surf, (0, 0))
 
-        # grid lines
-        for col in range(start_col, end_col + 1):
-            x = col * TILE_WIDTH - camera_x
-            pygame.draw.line(screen, GRID_COLOR, (x, 0), (x, WINDOW_HEIGHT), 1)
-        for row in range(start_row, end_row + 1):
-            y = row * TILE_HEIGHT - camera_y
-            pygame.draw.line(screen, GRID_COLOR, (0, y), (viewport_width, y), 1)
+        # grid lines - skip in background_bounds mode
+        if mode != "background_bounds":
+            for col in range(start_col, end_col + 1):
+                x = col * TILE_WIDTH - camera_x
+                pygame.draw.line(screen, GRID_COLOR, (x, 0), (x, WINDOW_HEIGHT), 1)
+            for row in range(start_row, end_row + 1):
+                y = row * TILE_HEIGHT - camera_y
+                pygame.draw.line(screen, GRID_COLOR, (0, y), (viewport_width, y), 1)
 
-        # tile highlight (full cell)
-        if viewport_rect.collidepoint(mouse_x, mouse_y):
-            world_x = camera_x + mouse_x
-            world_y = camera_y + mouse_y
-            highlight_col = int(world_x // TILE_WIDTH)
-            highlight_row = int(world_y // TILE_HEIGHT)
-            if 0 <= highlight_col < actual_cols and 0 <= highlight_row < actual_rows:
-                overlay = pygame.Surface((TILE_WIDTH, TILE_HEIGHT), pygame.SRCALPHA)
-                overlay.fill(HILIGHT_COLOR)
-                screen.blit(overlay, (highlight_col * TILE_WIDTH - camera_x, highlight_row * TILE_HEIGHT - camera_y))
+            # tile highlight (full cell)
+            if viewport_rect.collidepoint(mouse_x, mouse_y):
+                world_x = camera_x + mouse_x
+                world_y = camera_y + mouse_y
+                highlight_col = int(world_x // TILE_WIDTH)
+                highlight_row = int(world_y // TILE_HEIGHT)
+                if 0 <= highlight_col < actual_cols and 0 <= highlight_row < actual_rows:
+                    overlay = pygame.Surface((TILE_WIDTH, TILE_HEIGHT), pygame.SRCALPHA)
+                    overlay.fill(HILIGHT_COLOR)
+                    screen.blit(overlay, (highlight_col * TILE_WIDTH - camera_x, highlight_row * TILE_HEIGHT - camera_y))
 
-        # draw mobs
-        for mob in mobs:
-            img = mob_images.get(mob["mob_name"])
-            screen_x = mob["x"] - camera_x
-            screen_y = mob["y"] - camera_y
-            if img:
-                rect = img.get_rect(center=(screen_x, screen_y))
-                screen.blit(img, rect)
-            else:
-                pygame.draw.circle(screen, (255, 0, 0), (int(screen_x), int(screen_y)), 10)
+            # draw mobs
+            for mob in mobs:
+                img = mob_images.get(mob["mob_name"])
+                screen_x = mob["x"] - camera_x
+                screen_y = mob["y"] - camera_y
+                if img:
+                    rect = img.get_rect(center=(screen_x, screen_y))
+                    screen.blit(img, rect)
+                else:
+                    pygame.draw.circle(screen, (255, 0, 0), (int(screen_x), int(screen_y)), 10)
 
-        if mode == "mobs" and viewport_rect.collidepoint(mouse_x, mouse_y):
+        if mode == "mobs" and mode != "background_bounds" and viewport_rect.collidepoint(mouse_x, mouse_y):
             preview = mob_images.get(mob_types[current_mob_index])
             if preview:
                 temp = preview.copy()
@@ -1355,8 +1514,69 @@ def main():
                 rect = temp.get_rect(center=(mouse_x, mouse_y))
                 screen.blit(temp, rect)
 
-        if mode == "backgrounds" and viewport_rect.collidepoint(mouse_x, mouse_y):
+        if (mode == "backgrounds" or mode == "background_bounds") and viewport_rect.collidepoint(mouse_x, mouse_y):
             world_y = camera_y + mouse_y
+            
+            # Draw global boundary lines (for all backgrounds)
+            # Check if mouse is near global boundary lines for highlighting
+            is_near_start = False
+            is_near_end = False
+            mouse_screen_y = mouse_y
+            if global_bg_start_y is not None:
+                screen_start_y = global_bg_start_y - camera_y
+                if abs(mouse_screen_y - screen_start_y) < 15:
+                    is_near_start = True
+            if global_bg_end_y is not None:
+                screen_end_y = global_bg_end_y - camera_y
+                if abs(mouse_screen_y - screen_end_y) < 15:
+                    is_near_end = True
+            
+            # Draw global start_y line (top boundary - cyan)
+            if global_bg_start_y is not None:
+                screen_start_y = global_bg_start_y - camera_y
+                if -50 < screen_start_y < WINDOW_HEIGHT + 50:
+                    # Highlight if dragging or near mouse
+                    if dragging_boundary_line == "start":
+                        color = (0, 255, 255)  # Bright cyan when dragging
+                        line_width = 4
+                    elif is_near_start:
+                        color = (100, 255, 255)  # Light cyan when hovered
+                        line_width = 3
+                    else:
+                        color = (100, 200, 200)  # Dim cyan normally
+                        line_width = 2
+                    pygame.draw.line(screen, color, (0, screen_start_y), (viewport_width, screen_start_y), line_width)
+                    # Draw label
+                    label_text = "TOP (Drag to move)" if dragging_boundary_line == "start" or is_near_start else "TOP - Global Background Boundary"
+                    text = font.render(label_text, True, color)
+                    screen.blit(text, (10, screen_start_y - 15))
+            
+            # Draw global end_y line (bottom boundary - magenta)
+            if global_bg_end_y is not None:
+                screen_end_y = global_bg_end_y - camera_y
+                if -50 < screen_end_y < WINDOW_HEIGHT + 50:
+                    # Highlight if dragging or near mouse
+                    if dragging_boundary_line == "end":
+                        color = (255, 100, 255)  # Bright magenta when dragging
+                        line_width = 4
+                    elif is_near_end:
+                        color = (255, 150, 255)  # Light magenta when hovered
+                        line_width = 3
+                    else:
+                        color = (200, 100, 200)  # Dim magenta normally
+                        line_width = 2
+                    pygame.draw.line(screen, color, (0, screen_end_y), (viewport_width, screen_end_y), line_width)
+                    # Draw label
+                    label_text = "BOTTOM (Drag to move)" if dragging_boundary_line == "end" or is_near_end else "BOTTOM - Global Background Boundary"
+                    text = font.render(label_text, True, color)
+                    screen.blit(text, (10, screen_end_y - 15))
+            
+            # If no bounds set, show hint to create them
+            if global_bg_start_y is None and global_bg_end_y is None:
+                hint_text = font.render("HOW TO CREATE BOUNDS: Click & drag from the TOP or BOTTOM edge of any background", True, (255, 255, 0))
+                screen.blit(hint_text, (viewport_width // 2 - hint_text.get_width() // 2, 30))
+                hint_text2 = font.render("(Hover near the top/bottom edge of a background and click-drag to create the boundary line)", True, (200, 200, 200))
+                screen.blit(hint_text2, (viewport_width // 2 - hint_text2.get_width() // 2, 55))
             
             # Show which background layer would be deleted (if right-clicking)
             closest_layer_idx = None
@@ -1394,7 +1614,10 @@ def main():
                         layer_idx = layer.get("layer_index", 0)
                         animated = layer.get("animated", False)
                         anim_text = f" | ANIMATED: {animated} (A = toggle)" if repeat else ""
-                        repeat_text = font.render(f"REPEAT: {repeat} (R = toggle) | INDEX: {layer_idx} (+/- = change){anim_text}", True, (200, 200, 0))
+                        bounds_text = ""
+                        if global_bg_start_y is not None or global_bg_end_y is not None:
+                            bounds_text = f" | GLOBAL BOUNDS: {global_bg_start_y if global_bg_start_y else '∞'} to {global_bg_end_y if global_bg_end_y else '∞'} (C = clear)"
+                        repeat_text = font.render(f"REPEAT: {repeat} (R = toggle) | INDEX: {layer_idx} (+/- = change){anim_text}{bounds_text}", True, (200, 200, 0))
                         screen.blit(repeat_text, (viewport_width // 2 - repeat_text.get_width() // 2, screen_layer_y + 5))
                     else:
                         pygame.draw.line(screen, (100, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
@@ -1410,7 +1633,10 @@ def main():
                             layer_idx = layer.get("layer_index", 0)
                             animated = layer.get("animated", False)
                             anim_text = f" | ANIMATED: {animated} (A = toggle)" if layer.get("repeat", False) else ""
-                            drag_text = font.render(f"LEFT-CLICK & DRAG TO MOVE | R = toggle repeat | INDEX: {layer_idx} (+/- = change){anim_text}", True, (255, 200, 0))
+                            bounds_text = ""
+                            if global_bg_start_y is not None or global_bg_end_y is not None:
+                                bounds_text = f" | GLOBAL BOUNDS: {global_bg_start_y if global_bg_start_y else '∞'} to {global_bg_end_y if global_bg_end_y else '∞'} (C = clear)"
+                            drag_text = font.render(f"LEFT-CLICK & DRAG TO MOVE | R = toggle repeat | INDEX: {layer_idx} (+/- = change){anim_text}{bounds_text}", True, (255, 200, 0))
                             screen.blit(drag_text, (screen_layer_x - drag_text.get_width() // 2, screen_layer_y - 35))
                         else:
                             pygame.draw.line(screen, (150, 100, 100), (screen_layer_x, screen_layer_y - 10), (screen_layer_x, screen_layer_y + img_height + 10), 2)
@@ -1442,16 +1668,17 @@ def main():
                 # Draw vertical line at X position
                 pygame.draw.line(screen, (255, 255, 0), (mouse_x, screen_y - 20), (mouse_x, screen_y + img_height + 20), 2)
 
-        # draw lines
-        for line in lines:
-            p1 = (line['p1'][0] - camera_x, line['p1'][1] - camera_y)
-            p2 = (line['p2'][0] - camera_x, line['p2'][1] - camera_y)
-            color = (0, 255, 0) if line.get('type') == 'floor' else (255, 0, 0)
-            pygame.draw.line(screen, color, p1, p2, 3)
-            pygame.draw.circle(screen, (255, 255, 255), (int(p1[0]), int(p1[1])), 3)
-            pygame.draw.circle(screen, (255, 255, 255), (int(p2[0]), int(p2[1])), 3)
+        # draw lines - skip in background_bounds mode
+        if mode != "background_bounds":
+            for line in lines:
+                p1 = (line['p1'][0] - camera_x, line['p1'][1] - camera_y)
+                p2 = (line['p2'][0] - camera_x, line['p2'][1] - camera_y)
+                color = (0, 255, 0) if line.get('type') == 'floor' else (255, 0, 0)
+                pygame.draw.line(screen, color, p1, p2, 3)
+                pygame.draw.circle(screen, (255, 255, 255), (int(p1[0]), int(p1[1])), 3)
+                pygame.draw.circle(screen, (255, 255, 255), (int(p2[0]), int(p2[1])), 3)
 
-        if mode == "lines":
+        if mode == "lines" and mode != "background_bounds":
             # Draw cursor snap indicator
             world_x = camera_x + mouse_x
             world_y = camera_y + mouse_y
@@ -1472,25 +1699,26 @@ def main():
                 pygame.draw.line(screen, cursor_color, p1, p2, 2)
                 pygame.draw.circle(screen, (255, 255, 255), (int(p1[0]), int(p1[1])), 3)
 
-        # Draw spawn point
-        spawn_screen_x = spawn_point["x"] - camera_x
-        spawn_screen_y = spawn_point["y"] - camera_y
-        if -50 < spawn_screen_x < viewport_width + 50 and -50 < spawn_screen_y < WINDOW_HEIGHT + 50:
-            # Draw spawn point indicator
-            spawn_color = (0, 255, 0) if mode == "spawn" else (100, 255, 100)
-            pygame.draw.circle(screen, spawn_color, (int(spawn_screen_x), int(spawn_screen_y)), 15, 3)
-            pygame.draw.circle(screen, spawn_color, (int(spawn_screen_x), int(spawn_screen_y)), 8, 2)
-            # Draw label
-            if mode == "spawn":
-                label_text = font.render("SPAWN", True, spawn_color)
-                screen.blit(label_text, (int(spawn_screen_x) - label_text.get_width() // 2, int(spawn_screen_y) - 30))
+        # Draw spawn point - skip in background_bounds mode
+        if mode != "background_bounds":
+            spawn_screen_x = spawn_point["x"] - camera_x
+            spawn_screen_y = spawn_point["y"] - camera_y
+            if -50 < spawn_screen_x < viewport_width + 50 and -50 < spawn_screen_y < WINDOW_HEIGHT + 50:
+                # Draw spawn point indicator
+                spawn_color = (0, 255, 0) if mode == "spawn" else (100, 255, 100)
+                pygame.draw.circle(screen, spawn_color, (int(spawn_screen_x), int(spawn_screen_y)), 15, 3)
+                pygame.draw.circle(screen, spawn_color, (int(spawn_screen_x), int(spawn_screen_y)), 8, 2)
+                # Draw label
+                if mode == "spawn":
+                    label_text = font.render("SPAWN", True, spawn_color)
+                    screen.blit(label_text, (int(spawn_screen_x) - label_text.get_width() // 2, int(spawn_screen_y) - 30))
 
         # palette
         pygame.draw.rect(screen, PALETTE_BG, palette_rect)
         y_offset = 10 - palette_scroll
         
         # Show different palette based on mode
-        if mode == "backgrounds":
+        if mode == "backgrounds" or mode == "background_bounds":
             entries_to_show = bg_entries
             selected_id = selected_bg_id
             images_dict = bg_images
@@ -1515,14 +1743,9 @@ def main():
 
             img_data = images_dict.get(entry_id)
             if img_data:
-                if mode == "backgrounds":
-                    preview_pos_x = rect.x + 8 + img_data['preview_ox']
-                    preview_pos_y = rect.y + 6 + img_data['preview_oy']
-                    screen.blit(img_data['preview_img'], (preview_pos_x, preview_pos_y))
-                else:
-                    preview_pos_x = rect.x + 8 + img_data['preview_ox']
-                    preview_pos_y = rect.y + 6 + img_data['preview_oy']
-                    screen.blit(img_data['preview_img'], (preview_pos_x, preview_pos_y))
+                preview_pos_x = rect.x + 8 + img_data['preview_ox']
+                preview_pos_y = rect.y + 6 + img_data['preview_oy']
+                screen.blit(img_data['preview_img'], (preview_pos_x, preview_pos_y))
 
             label = f"ID {entry_id}: {entry['label']}"
             text = font.render(label, True, PALETTE_TEXT)
@@ -1531,16 +1754,26 @@ def main():
             y_offset += PALETTE_ENTRY_HEIGHT
 
         # instructions
-        info_lines = [
-            f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs/lines/backgrounds",
-            "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
-            f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
-            f"Lines: Left click = start/end line (auto-connects), Right click = cancel/delete, T = toggle type ({line_type})",
-            f"Backgrounds: Left click = place, Left click & drag = move (non-repeating), Right click = delete, R = toggle repeat, A = toggle animation (repeating only), +/- = layer index ({current_layer_index}), M = resize map",
-            f"Spawn: Left click = set spawn point (current: {spawn_point['x']}, {spawn_point['y']})",
-            "Map Resize: In tiles mode, drag map borders (highlighted in yellow) to resize",
-            "S = save tiles, mobs, lines, backgrounds & spawn, ESC/Q = quit",
-        ]
+        if mode == "background_bounds":
+            info_lines = [
+                f"map{map_id} | mode: BACKGROUND BOUNDS | camera: arrows/WASD | TAB to switch modes",
+                "This mode shows ONLY backgrounds and boundary lines (no tiles, mobs, lines, spawn)",
+                "Set the TOP boundary (cyan line): Click & drag from top edge of any background",
+                "Set the BOTTOM boundary (magenta line): Click & drag from bottom edge of any background",
+                "Drag the boundary lines to adjust them. Backgrounds will stretch to fill the entire screen height",
+                "C = clear bounds, S = save, ESC/Q = quit",
+            ]
+        else:
+            info_lines = [
+                f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs/lines/backgrounds/spawn/bounds",
+                "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
+                f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
+                f"Lines: Left click = start/end line (auto-connects), Right click = cancel/delete, T = toggle type ({line_type})",
+                f"Backgrounds: Left click = place, Left click & drag = move (non-repeating), Drag top/bottom lines = set bounds, Right click = delete, R = toggle repeat, A = toggle animation (repeating only), C = clear bounds, +/- = layer index ({current_layer_index}), M = resize map",
+                f"Spawn: Left click = set spawn point (current: {spawn_point['x']}, {spawn_point['y']})",
+                "Map Resize: In tiles mode, drag map borders (highlighted in yellow) to resize",
+                "S = save tiles, mobs, lines, backgrounds & spawn, ESC/Q = quit",
+            ]
         y = 5
         for line in info_lines:
             text = font.render(line, True, (20, 20, 20))
