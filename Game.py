@@ -168,12 +168,14 @@ class Game:
         self.mobs = self.map.get_mobs()
         # Get map boundaries to pass to player
         map_bounds = self.map.get_map_bounds()
+        # Get spawn point from map
+        spawn_x, spawn_y = self.map.get_spawn_point()
         # Spawn Player (Would move to Map class on next update)
         player = Player(
             self.screen,
             'player',
-            400,
-            200,
+            spawn_x,
+            spawn_y,
             1,
             3,
             200,

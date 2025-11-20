@@ -62,7 +62,9 @@ def get_paths(map_id: int):
     tiles_csv_path = os.path.join(base_dir, "maps", f"map{map_id}_tiles.csv")
     mobs_csv_path = os.path.join(base_dir, "maps", f"map{map_id}_mobs.csv")
     lines_json_path = os.path.join(base_dir, "maps", f"map{map_id}_lines.json")
-    return base_dir, tiles_csv_path, mobs_csv_path, lines_json_path
+    backgrounds_json_path = os.path.join(base_dir, "maps", f"map{map_id}_backgrounds.json")
+    spawn_json_path = os.path.join(base_dir, "maps", f"map{map_id}_spawn.json")
+    return base_dir, tiles_csv_path, mobs_csv_path, lines_json_path, backgrounds_json_path, spawn_json_path
 
 
 def discover_mob_types(base_dir: str):
@@ -250,6 +252,97 @@ def save_lines(json_path: str, lines):
         print(f"Error saving lines: {e}")
 
 
+def load_background_manifest(base_dir: str):
+    manifest_path = os.path.join(base_dir, "maps", "background_manifest.json")
+    if not os.path.exists(manifest_path):
+        return [{"id": 0, "label": "Empty", "path": None}]
+    with open(manifest_path) as f:
+        data = json.load(f)
+    entries = [{"id": 0, "label": "Empty", "path": None}]
+    entries.extend(sorted(data.get("backgrounds", []), key=lambda e: e["id"]))
+    return entries
+
+
+def load_background_images(base_dir: str, bg_entries):
+    backgrounds_root = os.path.join(base_dir, "sprites", "maps", "back")
+    cache = {}
+    for entry in bg_entries:
+        bg_id = entry["id"]
+        path = entry.get("path")
+        if bg_id == 0 or not path:
+            continue
+        full_path = os.path.join(backgrounds_root, path)
+        if not os.path.exists(full_path):
+            print(f"[map_editor] Missing background sprite for id={bg_id}: {full_path}")
+            continue
+        try:
+            img = pygame.image.load(full_path).convert_alpha()
+            # Scale preview for palette
+            ow, oh = img.get_size()
+            if ow > 0 and oh > 0:
+                scale_prev = min(PREVIEW_WIDTH / ow, PREVIEW_HEIGHT / oh)
+                pw = int(ow * scale_prev)
+                ph = int(oh * scale_prev)
+                preview_img = pygame.transform.scale(img, (pw, ph))
+                prev_ox = (PREVIEW_WIDTH - pw) // 2
+                prev_oy = (PREVIEW_HEIGHT - ph) // 2
+                cache[bg_id] = {
+                    'img': img,
+                    'preview_img': preview_img,
+                    'preview_ox': prev_ox,
+                    'preview_oy': prev_oy,
+                }
+        except pygame.error:
+            continue
+    return cache
+
+
+def load_backgrounds(json_path: str):
+    if not os.path.exists(json_path):
+        return []
+    try:
+        with open(json_path, "r") as f:
+            data = json.load(f)
+            return data.get("layers", [])
+    except Exception as e:
+        print(f"Error loading backgrounds: {e}")
+        return []
+
+
+def save_backgrounds(json_path: str, layers):
+    try:
+        os.makedirs(os.path.dirname(json_path), exist_ok=True)
+        with open(json_path, "w") as f:
+            json.dump({"layers": layers}, f, indent=2)
+        print(f"[map_editor] Saved backgrounds to {json_path}")
+    except Exception as e:
+        print(f"Error saving backgrounds: {e}")
+
+
+def load_spawn(json_path: str):
+    """Load spawn point from JSON."""
+    if not os.path.exists(json_path):
+        return {"x": 400, "y": 200}  # Default spawn
+    try:
+        with open(json_path, "r") as f:
+            data = json.load(f)
+            return {"x": data.get("x", 400), "y": data.get("y", 200)}
+    except Exception as e:
+        print(f"Error loading spawn: {e}")
+        return {"x": 400, "y": 200}
+
+
+def save_spawn(json_path: str, spawn):
+    """Save spawn point to JSON."""
+    try:
+        os.makedirs(os.path.dirname(json_path), exist_ok=True)
+        with open(json_path, "w") as f:
+            json.dump(spawn, f, indent=2)
+        print(f"[map_editor] Saved spawn point to {json_path}")
+    except Exception as e:
+        print(f"Error saving spawn: {e}")
+
+
 def get_snapped_point(lines, world_x, world_y, threshold=15):
     """Find a point to snap to within threshold distance."""
     best_pt = None
@@ -292,6 +385,35 @@ def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
 
+def calculate_optimal_map_width(bg_layers, bg_images):
+    """
+    Calculate optimal map width that fits background images perfectly.
+    Returns the LCM of all background image widths, or a reasonable default.
+    """
+    if not bg_layers:
+        return GRID_COLS * TILE_WIDTH
+    
+    widths = []
+    for layer in bg_layers:
+        bg_id = layer.get("background_id", 0)
+        if bg_id == 0:
+            continue
+        bg_img_data = bg_images.get(bg_id)
+        if bg_img_data:
+            widths.append(bg_img_data['img'].get_width())
+    
+    if not widths:
+        return GRID_COLS * TILE_WIDTH
+    
+    # Find LCM of all widths (simplified: use max width as base)
+    # For simplicity, we'll use the maximum width and ensure map is a multiple
+    max_width = max(widths)
+    # Round up to nearest multiple of max_width
+    current_map_width = GRID_COLS * TILE_WIDTH
+    optimal_width = ((current_map_width // max_width) + 1) * max_width if max_width > 0 else current_map_width
+    return optimal_width
+
+
 def main():
     if len(sys.argv) > 1:
         try:
@@ -302,9 +424,10 @@ def main():
     else:
         map_id = DEFAULT_MAP_ID
 
-    base_dir, tiles_csv_path, mobs_csv_path, lines_json_path = get_paths(map_id)
+    base_dir, tiles_csv_path, mobs_csv_path, lines_json_path, backgrounds_json_path, spawn_json_path = get_paths(map_id)
     tile_entries = load_tile_manifest(base_dir)
     mob_types = discover_mob_types(base_dir)
+    bg_entries = load_background_manifest(base_dir)
 
     pygame.init()
     pygame.display.set_caption(f"Map Editor - map{map_id}")
@@ -316,10 +439,13 @@ def main():
 
     tile_images = load_tile_images(base_dir, tile_entries)
     mob_images = load_mob_images(base_dir, mob_types, TILE_HEIGHT)
+    bg_images = load_background_images(base_dir, bg_entries)
 
     grid = load_or_create_grid(tiles_csv_path, GRID_COLS, GRID_ROWS)
     mobs = load_mobs(mobs_csv_path)
     lines = load_lines(lines_json_path)
+    bg_layers = load_backgrounds(backgrounds_json_path)
+    spawn_point = load_spawn(spawn_json_path)
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 20)
@@ -330,9 +456,18 @@ def main():
 
     palette_scroll = 0
     selected_tile_id = 0
-    selected_tile_id = 0
-    mode = "tiles"  # tiles, mobs, lines
+    selected_bg_id = 0
+    mode = "tiles"  # tiles, mobs, lines, backgrounds, spawn
     current_mob_index = 0
+    current_layer_index = 0  # Z-order for backgrounds (lower = behind)
+    
+    # Border dragging state
+    dragging_border = None  # "left", "right", "top", "bottom", or None
+    drag_start_pos = None  # World position when drag started
+    drag_start_screen_pos = None  # Screen position when drag started (for stable calculation)
+    drag_start_grid_size = None  # (cols, rows) when drag started
+    drag_start_camera = None  # (camera_x, camera_y) when drag started
+    RESIZE_SNAP_INTERVAL = 2  # Resize every N tiles for better control (2 = every 2 tiles)
     
     # Line editing state
     line_start_point = None
@@ -342,18 +477,21 @@ def main():
     while running:
         dt = clock.tick(60)
 
-        # camera movement
-        if move_left:
-            camera_x -= CAMERA_SPEED
-        if move_right:
-            camera_x += CAMERA_SPEED
-        if move_up:
-            camera_y -= CAMERA_SPEED
-        if move_down:
-            camera_y += CAMERA_SPEED
+        # camera movement (disabled when dragging borders)
+        if not dragging_border:
+            if move_left:
+                camera_x -= CAMERA_SPEED
+            if move_right:
+                camera_x += CAMERA_SPEED
+            if move_up:
+                camera_y -= CAMERA_SPEED
+            if move_down:
+                camera_y += CAMERA_SPEED
 
-        max_cam_x = max(0, GRID_COLS * TILE_WIDTH - viewport_width)
-        max_cam_y = max(0, GRID_ROWS * TILE_HEIGHT - WINDOW_HEIGHT)
+        actual_cols = len(grid[0]) if grid else GRID_COLS
+        actual_rows = len(grid) if grid else GRID_ROWS
+        max_cam_x = max(0, actual_cols * TILE_WIDTH - viewport_width)
+        max_cam_y = max(0, actual_rows * TILE_HEIGHT - WINDOW_HEIGHT)
         camera_x = clamp(camera_x, 0, max_cam_x)
         camera_y = clamp(camera_y, 0, max_cam_y)
 
@@ -369,11 +507,31 @@ def main():
                     save_grid(tiles_csv_path, grid)
                     save_mobs(mobs_csv_path, mobs)
                     save_lines(lines_json_path, lines)
+                    save_backgrounds(backgrounds_json_path, bg_layers)
+                    save_spawn(spawn_json_path, spawn_point)
+                elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
+                    if mode == "backgrounds":
+                        current_layer_index = min(10, current_layer_index + 1)
+                elif event.key == pygame.K_MINUS:
+                    if mode == "backgrounds":
+                        current_layer_index = max(0, current_layer_index - 1)
+                elif event.key == pygame.K_r and mode == "backgrounds":
+                    # Resize map to fit backgrounds perfectly
+                    optimal_width = calculate_optimal_map_width(bg_layers, bg_images)
+                    optimal_cols = max(len(grid[0]) if grid else GRID_COLS, int(math.ceil(optimal_width / TILE_WIDTH)))
+                    # Resize grid
+                    for row in grid:
+                        while len(row) < optimal_cols:
+                            row.append(0)
+                    print(f"[map_editor] Resized map to {optimal_cols} columns ({optimal_cols * TILE_WIDTH}px) to fit backgrounds")
                 elif event.key == pygame.K_TAB:
                     if mode == "tiles": mode = "mobs"
                     elif mode == "mobs": mode = "lines"
+                    elif mode == "lines": mode = "backgrounds"
+                    elif mode == "backgrounds": mode = "spawn"
                     else: mode = "tiles"
                     line_start_point = None
+                    dragging_border = None
                 elif event.key == pygame.K_t and mode == "lines":
                     line_type = "wall" if line_type == "floor" else "floor"
                 elif event.key in (pygame.K_LEFT, pygame.K_a):
@@ -400,20 +558,67 @@ def main():
             elif event.type == pygame.MOUSEWHEEL:
                 if palette_rect.collidepoint(mouse_x, mouse_y):
                     palette_scroll -= event.y * 30
-                    max_scroll = max(0, len(tile_entries) * PALETTE_ENTRY_HEIGHT - WINDOW_HEIGHT + 40)
+                    if mode == "backgrounds":
+                        max_scroll = max(0, len(bg_entries) * PALETTE_ENTRY_HEIGHT - WINDOW_HEIGHT + 40)
+                    else:
+                        max_scroll = max(0, len(tile_entries) * PALETTE_ENTRY_HEIGHT - WINDOW_HEIGHT + 40)
                     palette_scroll = clamp(palette_scroll, 0, max_scroll)
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 if palette_rect.collidepoint(event.pos):
                     local_y = event.pos[1] + palette_scroll
                     idx = int(local_y // PALETTE_ENTRY_HEIGHT)
-                    if 0 <= idx < len(tile_entries):
-                        selected_tile_id = tile_entries[idx]["id"]
+                    if mode == "backgrounds":
+                        if 0 <= idx < len(bg_entries):
+                            selected_bg_id = bg_entries[idx]["id"]
+                    else:
+                        if 0 <= idx < len(tile_entries):
+                            selected_tile_id = tile_entries[idx]["id"]
                 elif viewport_rect.collidepoint(event.pos):
                     world_x = camera_x + event.pos[0]
                     world_y = camera_y + event.pos[1]
                     col = int(world_x // TILE_WIDTH)
                     row = int(world_y // TILE_HEIGHT)
-                    if 0 <= col < GRID_COLS and 0 <= row < GRID_ROWS:
+                    actual_cols = len(grid[0]) if grid else GRID_COLS
+                    actual_rows = len(grid) if grid else GRID_ROWS
+                    
+                    # Check for border dragging first (only in tiles mode)
+                    border_clicked = False
+                    if mode == "tiles" and event.button == 1 and not dragging_border:
+                        map_right = actual_cols * TILE_WIDTH
+                        map_bottom = actual_rows * TILE_HEIGHT
+                        BORDER_THRESHOLD = 20
+                        
+                        if abs(world_x) < BORDER_THRESHOLD and 0 <= world_y <= map_bottom:
+                            dragging_border = "left"
+                            drag_start_pos = world_x
+                            drag_start_screen_pos = event.pos[0]  # Screen X
+                            drag_start_grid_size = (actual_cols, actual_rows)
+                            drag_start_camera = (camera_x, camera_y)
+                            border_clicked = True
+                        elif abs(world_x - map_right) < BORDER_THRESHOLD and 0 <= world_y <= map_bottom:
+                            dragging_border = "right"
+                            drag_start_pos = world_x
+                            drag_start_screen_pos = event.pos[0]  # Screen X
+                            drag_start_grid_size = (actual_cols, actual_rows)
+                            drag_start_camera = (camera_x, camera_y)
+                            border_clicked = True
+                        elif abs(world_y) < BORDER_THRESHOLD and 0 <= world_x <= map_right:
+                            dragging_border = "top"
+                            drag_start_pos = world_y
+                            drag_start_screen_pos = event.pos[1]  # Screen Y
+                            drag_start_grid_size = (actual_cols, actual_rows)
+                            drag_start_camera = (camera_x, camera_y)
+                            border_clicked = True
+                        elif abs(world_y - map_bottom) < BORDER_THRESHOLD and 0 <= world_x <= map_right:
+                            dragging_border = "bottom"
+                            drag_start_pos = world_y
+                            drag_start_screen_pos = event.pos[1]  # Screen Y
+                            drag_start_grid_size = (actual_cols, actual_rows)
+                            drag_start_camera = (camera_x, camera_y)
+                            border_clicked = True
+                    
+                    # Only process other clicks if not clicking on border
+                    if not border_clicked and 0 <= col < actual_cols and 0 <= row < actual_rows:
                         if mode == "tiles":
                             if event.button == 1:
                                 grid[row][col] = selected_tile_id
@@ -478,15 +683,190 @@ def main():
                                     
                                     if closest_line_idx is not None:
                                         lines.pop(closest_line_idx)
+                        elif mode == "backgrounds":
+                            if event.button == 1:  # Left click - place background layer
+                                if selected_bg_id != 0:
+                                    # Check if layer already exists at this Y position
+                                    existing_idx = None
+                                    for i, layer in enumerate(bg_layers):
+                                        if abs(layer.get("y", 0) - world_y) < 10:
+                                            existing_idx = i
+                                            break
+                                    
+                                    if existing_idx is not None:
+                                        # Update existing layer
+                                        bg_layers[existing_idx] = {
+                                            "background_id": selected_bg_id,
+                                            "y": world_y,
+                                            "layer_index": current_layer_index,
+                                            "scroll_speed": 1.0
+                                        }
+                                    else:
+                                        # Add new layer
+                                        bg_layers.append({
+                                            "background_id": selected_bg_id,
+                                            "y": world_y,
+                                            "layer_index": current_layer_index,
+                                            "scroll_speed": 1.0
+                                        })
+                            elif event.button == 3:  # Right click - delete layer
+                                closest_idx = None
+                                closest_dist = 50 ** 2
+                                for i, layer in enumerate(bg_layers):
+                                    dy = layer.get("y", 0) - world_y
+                                    dist = dy * dy
+                                    if dist <= closest_dist:
+                                        closest_dist = dist
+                                        closest_idx = i
+                                if closest_idx is not None:
+                                    bg_layers.pop(closest_idx)
+                        elif mode == "spawn":
+                            if event.button == 1:  # Left click - set spawn point
+                                spawn_point = {"x": world_x, "y": world_y}
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if event.button == 1:
+                    dragging_border = None
+                    drag_start_pos = None
+                    drag_start_screen_pos = None
+                    drag_start_grid_size = None
+                    drag_start_camera = None
+            elif event.type == pygame.MOUSEMOTION:
+                if dragging_border and drag_start_pos is not None and drag_start_screen_pos is not None and drag_start_grid_size is not None and drag_start_camera is not None:
+                    # Lock camera during drag - use screen coordinates for stable calculation
+                    start_cam_x, start_cam_y = drag_start_camera
+                    start_cols, start_rows = drag_start_grid_size
+                    
+                    current_cols = len(grid[0]) if grid else start_cols
+                    current_rows = len(grid) if grid else start_rows
+                    
+                    if dragging_border == "left":
+                        # Use screen coordinates for stable calculation
+                        screen_delta_x = event.pos[0] - drag_start_screen_pos
+                        # Convert screen delta to world delta (camera is locked, so this is accurate)
+                        world_delta_x = screen_delta_x
+                        # Calculate target columns with snap interval
+                        delta_tiles = int(world_delta_x // TILE_WIDTH)
+                        target_cols = max(1, start_cols - delta_tiles)
+                        # Snap to interval
+                        target_cols = (target_cols // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
+                        if target_cols < 1:
+                            target_cols = RESIZE_SNAP_INTERVAL
+                        
+                        # Only resize if different from current
+                        if target_cols != current_cols:
+                            # Adjust grid
+                            for row in grid:
+                                if target_cols < current_cols:
+                                    # Remove columns from left
+                                    row[:] = row[current_cols - target_cols:]
+                                else:
+                                    # Add columns to left
+                                    row[:0] = [0] * (target_cols - current_cols)
+                            # Adjust camera to keep view stable (maintain screen position)
+                            camera_x = start_cam_x + (target_cols - start_cols) * TILE_WIDTH
+                    elif dragging_border == "right":
+                        # Use screen coordinates for stable calculation
+                        screen_delta_x = event.pos[0] - drag_start_screen_pos
+                        world_delta_x = screen_delta_x
+                        # Calculate target columns with snap interval
+                        delta_tiles = int(world_delta_x // TILE_WIDTH)
+                        target_cols = max(1, start_cols + delta_tiles)
+                        # Snap to interval
+                        target_cols = ((target_cols + RESIZE_SNAP_INTERVAL - 1) // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
+                        
+                        # Only resize if different from current
+                        if target_cols != current_cols:
+                            # Adjust grid
+                            for row in grid:
+                                if target_cols < current_cols:
+                                    # Remove columns from right
+                                    row[:] = row[:target_cols]
+                                else:
+                                    # Add columns to right
+                                    row.extend([0] * (target_cols - current_cols))
+                            # Camera stays the same for right border
+                            camera_x = start_cam_x
+                    elif dragging_border == "top":
+                        # Use screen coordinates for stable calculation
+                        screen_delta_y = event.pos[1] - drag_start_screen_pos
+                        world_delta_y = screen_delta_y
+                        # Calculate target rows with snap interval
+                        delta_tiles = int(world_delta_y // TILE_HEIGHT)
+                        target_rows = max(1, start_rows - delta_tiles)
+                        # Snap to interval
+                        target_rows = (target_rows // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
+                        if target_rows < 1:
+                            target_rows = RESIZE_SNAP_INTERVAL
+                        
+                        # Only resize if different from current
+                        if target_rows != current_rows:
+                            # Adjust grid
+                            if target_rows < current_rows:
+                                # Remove rows from top
+                                grid[:] = grid[current_rows - target_rows:]
+                            else:
+                                # Add rows to top
+                                grid[:0] = [[0] * len(grid[0]) for _ in range(target_rows - current_rows)]
+                            # Adjust camera to keep view stable
+                            camera_y = start_cam_y + (target_rows - start_rows) * TILE_HEIGHT
+                    elif dragging_border == "bottom":
+                        # Use screen coordinates for stable calculation
+                        screen_delta_y = event.pos[1] - drag_start_screen_pos
+                        world_delta_y = screen_delta_y
+                        # Calculate target rows with snap interval
+                        delta_tiles = int(world_delta_y // TILE_HEIGHT)
+                        target_rows = max(1, start_rows + delta_tiles)
+                        # Snap to interval
+                        target_rows = ((target_rows + RESIZE_SNAP_INTERVAL - 1) // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
+                        
+                        # Only resize if different from current
+                        if target_rows != current_rows:
+                            # Adjust grid
+                            if target_rows < current_rows:
+                                # Remove rows from bottom
+                                grid[:] = grid[:target_rows]
+                            else:
+                                # Add rows to bottom
+                                actual_cols = len(grid[0]) if grid else GRID_COLS
+                                grid.extend([[0] * actual_cols for _ in range(target_rows - current_rows)])
+                            # Camera stays the same for bottom border
+                            camera_y = start_cam_y
 
         # --- drawing ---
         screen.fill(VIEWPORT_BG)
 
+        # draw background layers (behind everything)
+        for layer in sorted(bg_layers, key=lambda l: l.get("layer_index", 0)):
+            bg_id = layer.get("background_id", 0)
+            if bg_id == 0:
+                continue
+            bg_img_data = bg_images.get(bg_id)
+            if not bg_img_data:
+                continue
+            bg_img = bg_img_data['img']
+            y_pos = layer.get("y", 0)
+            img_width = bg_img.get_width()
+            img_height = bg_img.get_height()
+            
+            # Draw repeating background horizontally
+            start_x = -camera_x % img_width - img_width
+            end_x = viewport_width + img_width
+            screen_y = y_pos - camera_y
+            
+            # Only draw if visible
+            if screen_y + img_height >= 0 and screen_y < WINDOW_HEIGHT:
+                for x in range(start_x, end_x, img_width):
+                    temp = bg_img.copy()
+                    temp.set_alpha(180)  # Semi-transparent in editor
+                    screen.blit(temp, (x, screen_y))
+
         # draw tiles (only visible region)
+        actual_cols = len(grid[0]) if grid else GRID_COLS
+        actual_rows = len(grid) if grid else GRID_ROWS
         start_col = max(0, int(camera_x // TILE_WIDTH))
-        end_col = min(GRID_COLS, int(math.ceil((camera_x + viewport_width) / TILE_WIDTH)))
+        end_col = min(actual_cols, int(math.ceil((camera_x + viewport_width) / TILE_WIDTH)))
         start_row = max(0, int(camera_y // TILE_HEIGHT))
-        end_row = min(GRID_ROWS, int(math.ceil((camera_y + WINDOW_HEIGHT) / TILE_HEIGHT)))
+        end_row = min(actual_rows, int(math.ceil((camera_y + WINDOW_HEIGHT) / TILE_HEIGHT)))
 
         for row in range(start_row, end_row):
             for col in range(start_col, end_col):
@@ -500,6 +880,59 @@ def main():
                 screen_y = row * TILE_HEIGHT - camera_y
                 # Blit directly without clipping to allow overflow for taller/wider tiles
                 screen.blit(img_data['img'], (screen_x + img_data['grid_ox'], screen_y + img_data['grid_oy']))
+
+        # Draw map borders (highlighted when hoverable)
+        actual_cols = len(grid[0]) if grid else GRID_COLS
+        actual_rows = len(grid) if grid else GRID_ROWS
+        map_right = actual_cols * TILE_WIDTH
+        map_bottom = actual_rows * TILE_HEIGHT
+        
+        BORDER_THRESHOLD = 20
+        border_color = (255, 200, 0, 180)  # Orange/yellow for borders
+        
+        # Check if mouse is near borders (for highlighting)
+        world_mouse_x = camera_x + mouse_x if viewport_rect.collidepoint(mouse_x, mouse_y) else None
+        world_mouse_y = camera_y + mouse_y if viewport_rect.collidepoint(mouse_x, mouse_y) else None
+        
+        if world_mouse_x is not None and world_mouse_y is not None and mode == "tiles":
+            # Left border
+            if abs(world_mouse_x) < BORDER_THRESHOLD:
+                pygame.draw.line(screen, (255, 200, 0), (0 - camera_x, 0), (0 - camera_x, WINDOW_HEIGHT), 4)
+            # Right border
+            if abs(world_mouse_x - map_right) < BORDER_THRESHOLD:
+                pygame.draw.line(screen, (255, 200, 0), (map_right - camera_x, 0), (map_right - camera_x, WINDOW_HEIGHT), 4)
+            # Top border
+            if abs(world_mouse_y) < BORDER_THRESHOLD:
+                pygame.draw.line(screen, (255, 200, 0), (0, 0 - camera_y), (viewport_width, 0 - camera_y), 4)
+            # Bottom border
+            if abs(world_mouse_y - map_bottom) < BORDER_THRESHOLD:
+                pygame.draw.line(screen, (255, 200, 0), (0, map_bottom - camera_y), (viewport_width, map_bottom - camera_y), 4)
+        
+        # Draw border outlines (subtle)
+        border_alpha = 100
+        border_color_rgb = (255, 200, 0)
+        # Left border (only if visible)
+        if -camera_x < viewport_width:
+            border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
+            pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (max(0, 0 - camera_x), 0), (max(0, 0 - camera_x), WINDOW_HEIGHT), 2)
+            screen.blit(border_surf, (0, 0))
+        # Right border (only if visible)
+        if map_right - camera_x > 0:
+            border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
+            right_x = min(viewport_width, map_right - camera_x)
+            pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (right_x, 0), (right_x, WINDOW_HEIGHT), 2)
+            screen.blit(border_surf, (0, 0))
+        # Top border (only if visible)
+        if -camera_y < WINDOW_HEIGHT:
+            border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
+            pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (0, max(0, 0 - camera_y)), (viewport_width, max(0, 0 - camera_y)), 2)
+            screen.blit(border_surf, (0, 0))
+        # Bottom border (only if visible)
+        if map_bottom - camera_y > 0:
+            border_surf = pygame.Surface((viewport_width, WINDOW_HEIGHT), pygame.SRCALPHA)
+            bottom_y = min(WINDOW_HEIGHT, map_bottom - camera_y)
+            pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (0, bottom_y), (viewport_width, bottom_y), 2)
+            screen.blit(border_surf, (0, 0))
 
         # grid lines
         for col in range(start_col, end_col + 1):
@@ -515,7 +948,7 @@ def main():
             world_y = camera_y + mouse_y
             highlight_col = int(world_x // TILE_WIDTH)
             highlight_row = int(world_y // TILE_HEIGHT)
-            if 0 <= highlight_col < GRID_COLS and 0 <= highlight_row < GRID_ROWS:
+            if 0 <= highlight_col < actual_cols and 0 <= highlight_row < actual_rows:
                 overlay = pygame.Surface((TILE_WIDTH, TILE_HEIGHT), pygame.SRCALPHA)
                 overlay.fill(HILIGHT_COLOR)
                 screen.blit(overlay, (highlight_col * TILE_WIDTH - camera_x, highlight_row * TILE_HEIGHT - camera_y))
@@ -538,6 +971,24 @@ def main():
                 temp.set_alpha(160)
                 rect = temp.get_rect(center=(mouse_x, mouse_y))
                 screen.blit(temp, rect)
+
+        if mode == "backgrounds" and viewport_rect.collidepoint(mouse_x, mouse_y):
+            bg_img_data = bg_images.get(selected_bg_id)
+            if bg_img_data:
+                bg_img = bg_img_data['img']
+                world_y = camera_y + mouse_y
+                img_width = bg_img.get_width()
+                img_height = bg_img.get_height()
+                # Draw preview repeating horizontally
+                start_x = -camera_x % img_width - img_width
+                end_x = viewport_width + img_width
+                screen_y = world_y - camera_y
+                temp = bg_img.copy()
+                temp.set_alpha(160)
+                for x in range(start_x, end_x, img_width):
+                    screen.blit(temp, (x, screen_y))
+                # Draw horizontal line at Y position
+                pygame.draw.line(screen, (255, 255, 0), (0, mouse_y), (viewport_width, mouse_y), 2)
 
         # draw lines
         for line in lines:
@@ -569,11 +1020,35 @@ def main():
                 pygame.draw.line(screen, cursor_color, p1, p2, 2)
                 pygame.draw.circle(screen, (255, 255, 255), (int(p1[0]), int(p1[1])), 3)
 
+        # Draw spawn point
+        spawn_screen_x = spawn_point["x"] - camera_x
+        spawn_screen_y = spawn_point["y"] - camera_y
+        if -50 < spawn_screen_x < viewport_width + 50 and -50 < spawn_screen_y < WINDOW_HEIGHT + 50:
+            # Draw spawn point indicator
+            spawn_color = (0, 255, 0) if mode == "spawn" else (100, 255, 100)
+            pygame.draw.circle(screen, spawn_color, (int(spawn_screen_x), int(spawn_screen_y)), 15, 3)
+            pygame.draw.circle(screen, spawn_color, (int(spawn_screen_x), int(spawn_screen_y)), 8, 2)
+            # Draw label
+            if mode == "spawn":
+                label_text = font.render("SPAWN", True, spawn_color)
+                screen.blit(label_text, (int(spawn_screen_x) - label_text.get_width() // 2, int(spawn_screen_y) - 30))
+
         # palette
         pygame.draw.rect(screen, PALETTE_BG, palette_rect)
         y_offset = 10 - palette_scroll
-        for entry in tile_entries:
-            tile_id = entry["id"]
+        
+        # Show different palette based on mode
+        if mode == "backgrounds":
+            entries_to_show = bg_entries
+            selected_id = selected_bg_id
+            images_dict = bg_images
+        else:
+            entries_to_show = tile_entries
+            selected_id = selected_tile_id
+            images_dict = tile_images
+        
+        for entry in entries_to_show:
+            entry_id = entry["id"]
             rect = pygame.Rect(palette_rect.x + 10, y_offset, PALETTE_WIDTH - 20, PALETTE_ENTRY_HEIGHT - 6)
             if rect.bottom < 0:
                 y_offset += PALETTE_ENTRY_HEIGHT
@@ -581,19 +1056,23 @@ def main():
             if rect.top > WINDOW_HEIGHT:
                 break
 
-            bg_color = (60, 60, 70) if tile_id != selected_tile_id else (90, 120, 200)
+            bg_color = (60, 60, 70) if entry_id != selected_id else (90, 120, 200)
             pygame.draw.rect(screen, bg_color, rect, border_radius=6)
-            if tile_id == selected_tile_id:
+            if entry_id == selected_id:
                 pygame.draw.rect(screen, (255, 255, 255), rect, width=2, border_radius=6)
 
-            img_data = tile_images.get(tile_id)
+            img_data = images_dict.get(entry_id)
             if img_data:
-                preview_pos_x = rect.x + 8 + img_data['preview_ox']
-                preview_pos_y = rect.y + 6 + img_data['preview_oy']
-                # Blit scaled preview, centered
-                screen.blit(img_data['preview_img'], (preview_pos_x, preview_pos_y))
+                if mode == "backgrounds":
+                    preview_pos_x = rect.x + 8 + img_data['preview_ox']
+                    preview_pos_y = rect.y + 6 + img_data['preview_oy']
+                    screen.blit(img_data['preview_img'], (preview_pos_x, preview_pos_y))
+                else:
+                    preview_pos_x = rect.x + 8 + img_data['preview_ox']
+                    preview_pos_y = rect.y + 6 + img_data['preview_oy']
+                    screen.blit(img_data['preview_img'], (preview_pos_x, preview_pos_y))
 
-            label = f"ID {tile_id}: {entry['label']}"
+            label = f"ID {entry_id}: {entry['label']}"
             text = font.render(label, True, PALETTE_TEXT)
             screen.blit(text, (rect.x + PREVIEW_WIDTH + 16, rect.y + 10))
 
@@ -601,11 +1080,14 @@ def main():
 
         # instructions
         info_lines = [
-            f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs/lines",
+            f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs/lines/backgrounds",
             "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
             f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
             f"Lines: Left click = start/end line (auto-connects), Right click = cancel/delete, T = toggle type ({line_type})",
-            "S = save tiles, mobs & lines, ESC/Q = quit",
+            f"Backgrounds: Left click = place layer at Y, Right click = delete, +/- = change layer index ({current_layer_index}), R = resize map",
+            f"Spawn: Left click = set spawn point (current: {spawn_point['x']}, {spawn_point['y']})",
+            "Map Resize: In tiles mode, drag map borders (highlighted in yellow) to resize",
+            "S = save tiles, mobs, lines, backgrounds & spawn, ESC/Q = quit",
         ]
         y = 5
         for line in info_lines:

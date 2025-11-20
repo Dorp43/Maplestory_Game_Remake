@@ -28,6 +28,11 @@ class Map:
             if data.get("solid", True) and tile_id != 0
         }
         self.tile_images = self.load_tile_images()
+        self.background_manifest_path = os.path.join(base_dir, "background_manifest.json")
+        self.background_defs = self.load_background_manifest()
+        self.background_images = self.load_background_images()
+        self.background_layers = []
+        self.spawn_point = {"x": 400, "y": 200}  # Default spawn
         self.set_map(map_id)
 
     def set_map(self, map_id):
@@ -36,6 +41,10 @@ class Map:
         # load collision / platform tiles for this map from CSV
         self.load_tiles_from_csv(map_id)
         self.load_lines_from_json(map_id)
+        # load background layers
+        self.load_backgrounds_from_json(map_id)
+        # load spawn point
+        self.load_spawn_from_json(map_id)
 
         mobs_from_csv = self.load_mobs_from_csv(map_id)
         if mobs_from_csv:
@@ -288,7 +297,11 @@ class Map:
         return 0, self.screen.get_width(), 0, self.screen.get_height()
 
     def draw(self, surface, camera_x=0, camera_y=0):
-        """Render the tile grid onto the provided surface with camera offset."""
+        """Render backgrounds first, then the tile grid onto the provided surface with camera offset."""
+        # Draw background layers (back to front, sorted by layer index)
+        self.draw_backgrounds(surface, camera_x, camera_y)
+        
+        # Draw tiles
         if not self.tile_grid:
             return
         for y, row in enumerate(self.tile_grid):
@@ -377,3 +390,112 @@ class Map:
                 self.lines = json.load(f)
         except Exception as e:
             print(f"[Map] Error loading lines: {e}")
+
+    def load_background_manifest(self):
+        """Load background definitions (id -> path)."""
+        bg_defs = {
+            0: {"id": 0, "label": "Empty", "path": None}
+        }
+        if os.path.exists(self.background_manifest_path):
+            with open(self.background_manifest_path) as f:
+                data = json.load(f)
+                for entry in data.get("backgrounds", []):
+                    bg_defs[entry["id"]] = entry
+        else:
+            print("[Map] WARNING: background_manifest.json missing; using default empty backgrounds only.")
+        return bg_defs
+
+    def load_background_images(self):
+        """Load pygame surfaces for every background that has a sprite path."""
+        cache = {}
+        backgrounds_root = os.path.join(self.project_root, "sprites", "maps", "back")
+        for bg_id, entry in self.background_defs.items():
+            path = entry.get("path")
+            if bg_id == 0 or not path:
+                continue
+            sprite_path = os.path.join(backgrounds_root, path)
+            if not os.path.exists(sprite_path):
+                print(f"[Map] WARNING: missing background sprite for id {bg_id}: {sprite_path}")
+                continue
+            try:
+                img = pygame.image.load(sprite_path).convert_alpha()
+                cache[bg_id] = img
+            except pygame.error as e:
+                print(f"[Map] Error loading background {bg_id}: {e}")
+        return cache
+
+    def load_backgrounds_from_json(self, map_id: int):
+        """Load background layers from map{id}_backgrounds.json."""
+        self.background_layers = []
+        json_path = os.path.join(
+            os.path.dirname(__file__),
+            f"map{map_id}_backgrounds.json"
+        )
+        
+        if not os.path.exists(json_path):
+            return
+
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+                self.background_layers = data.get("layers", [])
+                # Sort layers by layer_index (lower = drawn first/behind)
+                self.background_layers.sort(key=lambda l: l.get("layer_index", 0))
+        except Exception as e:
+            print(f"[Map] Error loading backgrounds: {e}")
+
+    def draw_backgrounds(self, surface, camera_x=0, camera_y=0):
+        """Draw all background layers with horizontal repeating."""
+        screen_width = surface.get_width()
+        screen_height = surface.get_height()
+        
+        for layer in self.background_layers:
+            bg_id = layer.get("background_id", 0)
+            if bg_id == 0:
+                continue
+                
+            bg_img = self.background_images.get(bg_id)
+            if not bg_img:
+                continue
+            
+            # Get layer properties
+            y_pos = layer.get("y", 0)
+            scroll_speed = layer.get("scroll_speed", 1.0)  # Parallax effect (1.0 = normal, <1.0 = slower)
+            
+            # Calculate scroll offset with parallax
+            scroll_x = int(camera_x * scroll_speed)
+            img_width = bg_img.get_width()
+            img_height = bg_img.get_height()
+            
+            # Calculate how many times to repeat horizontally
+            # Start from leftmost visible position
+            start_x = -scroll_x % img_width - img_width
+            end_x = screen_width + img_width
+            
+            # Draw repeating background
+            for x in range(start_x, end_x, img_width):
+                screen_y = y_pos - camera_y
+                # Only draw if layer is visible on screen
+                if screen_y + img_height >= 0 and screen_y < screen_height:
+                    surface.blit(bg_img, (x, screen_y))
+
+    def load_spawn_from_json(self, map_id: int):
+        """Load spawn point from map{id}_spawn.json."""
+        json_path = os.path.join(
+            os.path.dirname(__file__),
+            f"map{map_id}_spawn.json"
+        )
+        
+        if not os.path.exists(json_path):
+            return
+
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+                self.spawn_point = {"x": data.get("x", 400), "y": data.get("y", 200)}
+        except Exception as e:
+            print(f"[Map] Error loading spawn point: {e}")
+
+    def get_spawn_point(self):
+        """Get the spawn point coordinates. Returns (x, y) tuple."""
+        return self.spawn_point.get("x", 400), self.spawn_point.get("y", 200)

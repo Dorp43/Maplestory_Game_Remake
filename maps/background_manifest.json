@@ -1,0 +1,15 @@
+{
+  "backgrounds": [
+    { "id": 0, "label": "Empty", "path": null },
+    { "id": 1, "label": "grassySoil-0", "path": "grassySoil.img/0.png" },
+    { "id": 2, "label": "grassySoil-1", "path": "grassySoil.img/1.png" },
+    { "id": 3, "label": "grassySoil-2", "path": "grassySoil.img/2.png" },
+    { "id": 4, "label": "grassySoil-3", "path": "grassySoil.img/3.png" },
+    { "id": 5, "label": "grassySoil-4", "path": "grassySoil.img/4.png" },
+    { "id": 6, "label": "grassySoil-5", "path": "grassySoil.img/5.png" },
+    { "id": 7, "label": "grassySoil-6", "path": "grassySoil.img/6.png" },
+    { "id": 8, "label": "grassySoil-7", "path": "grassySoil.img/7.png" },
+    { "id": 9, "label": "grassySoil-10", "path": "grassySoil.img/10.png" }
+  ]
+}
+
