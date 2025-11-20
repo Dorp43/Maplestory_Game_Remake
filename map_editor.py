@@ -448,7 +448,14 @@ def main():
 
     pygame.init()
     pygame.display.set_caption(f"Map Editor - map{map_id}")
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    # Get screen dimensions for fullscreen
+    screen_info = pygame.display.Info()
+    screen_width = screen_info.current_w
+    screen_height = screen_info.current_h
+    screen = pygame.display.set_mode((screen_width, screen_height), pygame.FULLSCREEN)
+    # Update window dimensions to match fullscreen
+    WINDOW_WIDTH = screen_width
+    WINDOW_HEIGHT = screen_height
 
     viewport_width = WINDOW_WIDTH - PALETTE_WIDTH
     viewport_rect = pygame.Rect(0, 0, viewport_width, WINDOW_HEIGHT)
@@ -464,6 +471,14 @@ def main():
     lines = load_lines(lines_json_path)
     bg_layers, global_bg_start_y, global_bg_end_y = load_backgrounds(backgrounds_json_path)
     spawn_point = load_spawn(spawn_json_path)
+    
+    # Set default border positions if not set (so they're ready to drag)
+    if global_bg_start_y is None:
+        global_bg_start_y = 0  # Top of map
+    if global_bg_end_y is None:
+        # Default to bottom of map (based on grid height)
+        actual_rows = len(grid) if grid else GRID_ROWS
+        global_bg_end_y = actual_rows * TILE_HEIGHT
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 20)
@@ -479,6 +494,8 @@ def main():
     mode = "tiles"  # tiles, mobs, lines, backgrounds, spawn, background_bounds
     current_mob_index = 0
     current_layer_index = 0  # Z-order for backgrounds (lower = behind)
+    show_grid_in_bg_bounds = False  # Toggle grid visibility in background_bounds mode
+    show_bg_indicators = True  # Toggle background layer indicator lines visibility in background_bounds mode
     
     # Background dragging state
     dragging_background = None  # Index of background being dragged, or None
@@ -538,7 +555,7 @@ def main():
                     save_backgrounds(backgrounds_json_path, bg_layers, global_bg_start_y, global_bg_end_y)
                     save_spawn(spawn_json_path, spawn_point)
                 elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
-                    if mode == "backgrounds":
+                    if mode == "backgrounds" or mode == "background_bounds":
                         # Get current mouse position to find hovered background
                         current_mouse_x, current_mouse_y = pygame.mouse.get_pos()
                         if viewport_rect.collidepoint(current_mouse_x, current_mouse_y):
@@ -573,7 +590,7 @@ def main():
                         else:
                             current_layer_index = min(10, current_layer_index + 1)
                 elif event.key == pygame.K_MINUS:
-                    if mode == "backgrounds":
+                    if mode == "backgrounds" or mode == "background_bounds":
                         # Get current mouse position to find hovered background
                         current_mouse_x, current_mouse_y = pygame.mouse.get_pos()
                         if viewport_rect.collidepoint(current_mouse_x, current_mouse_y):
@@ -607,7 +624,7 @@ def main():
                                 current_layer_index = max(0, current_layer_index - 1)
                         else:
                             current_layer_index = max(0, current_layer_index - 1)
-                elif event.key == pygame.K_r and mode == "backgrounds":
+                elif event.key == pygame.K_r and (mode == "backgrounds" or mode == "background_bounds"):
                     # Toggle repeat for closest background layer
                     # Get current mouse position
                     current_mouse_x, current_mouse_y = pygame.mouse.get_pos()
@@ -713,13 +730,32 @@ def main():
                     dragging_border = None
                     dragging_boundary_line = None
                 elif event.key == pygame.K_c and (mode == "backgrounds" or mode == "background_bounds"):
-                    # Clear global bounds
-                    global_bg_start_y = None
-                    global_bg_end_y = None
-                    print(f"[map_editor] Cleared global background bounds")
+                    # Reset global bounds to defaults (instead of clearing)
+                    actual_rows = len(grid) if grid else GRID_ROWS
+                    global_bg_start_y = 0  # Top of map
+                    global_bg_end_y = actual_rows * TILE_HEIGHT  # Bottom of map
+                    print(f"[map_editor] Reset global background bounds to defaults")
+                elif event.key == pygame.K_t and mode == "background_bounds":
+                    # Set top boundary at current mouse Y position
+                    if viewport_rect.collidepoint(mouse_x, mouse_y):
+                        global_bg_start_y = camera_y + mouse_y
+                        print(f"[map_editor] Set top boundary at Y={global_bg_start_y}")
+                elif event.key == pygame.K_b and mode == "background_bounds":
+                    # Set bottom boundary at current mouse Y position
+                    if viewport_rect.collidepoint(mouse_x, mouse_y):
+                        global_bg_end_y = camera_y + mouse_y
+                        print(f"[map_editor] Set bottom boundary at Y={global_bg_end_y}")
+                elif event.key == pygame.K_g and mode == "background_bounds":
+                    # Toggle grid visibility in background_bounds mode
+                    show_grid_in_bg_bounds = not show_grid_in_bg_bounds
+                    print(f"[map_editor] Grid visibility in background_bounds: {show_grid_in_bg_bounds}")
+                elif event.key == pygame.K_h and mode == "background_bounds":
+                    # Toggle background layer indicator lines visibility in background_bounds mode
+                    show_bg_indicators = not show_bg_indicators
+                    print(f"[map_editor] Background indicators visibility in background_bounds: {show_bg_indicators}")
                 elif event.key == pygame.K_t and mode == "lines":
                     line_type = "wall" if line_type == "floor" else "floor"
-                elif event.key == pygame.K_a and mode == "backgrounds":
+                elif event.key == pygame.K_a and (mode == "backgrounds" or mode == "background_bounds"):
                     # Toggle animation for closest background layer (only works for repeating)
                     # This must come before the camera movement handler
                     current_mouse_x, current_mouse_y = pygame.mouse.get_pos()
@@ -762,8 +798,8 @@ def main():
                 elif event.key == pygame.K_LEFT:
                     move_left = True
                 elif event.key == pygame.K_a:
-                    # A key for camera movement (only if not in backgrounds mode)
-                    if mode != "backgrounds":
+                    # A key for camera movement (only if not in backgrounds or background_bounds mode)
+                    if mode != "backgrounds" and mode != "background_bounds":
                         move_left = True
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
                     move_right = True
@@ -779,7 +815,7 @@ def main():
                 if event.key == pygame.K_LEFT:
                     move_left = False
                 elif event.key == pygame.K_a:
-                    if mode != "backgrounds":  # Only move camera if not in backgrounds mode
+                    if mode != "backgrounds" and mode != "background_bounds":  # Only move camera if not in backgrounds mode
                         move_left = False
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
                     move_right = False
@@ -799,7 +835,7 @@ def main():
                 if palette_rect.collidepoint(event.pos):
                     local_y = event.pos[1] + palette_scroll
                     idx = int(local_y // PALETTE_ENTRY_HEIGHT)
-                    if mode == "backgrounds":
+                    if mode == "backgrounds" or mode == "background_bounds":
                         if 0 <= idx < len(bg_entries):
                             selected_bg_id = bg_entries[idx]["id"]
                     else:
@@ -1280,6 +1316,8 @@ def main():
         # --- drawing ---
         screen.fill(VIEWPORT_BG)
 
+        # In the editor, always show backgrounds at NORMAL size (no scaling)
+        # Scaling will only happen in the actual game (maps/Map.py)
         # draw background layers (behind everything)
         for layer in sorted(bg_layers, key=lambda l: l.get("layer_index", 0)):
             bg_id = layer.get("background_id", 0)
@@ -1296,56 +1334,7 @@ def main():
             img_width = bg_img.get_width()
             img_height = bg_img.get_height()
             
-            # If global bounds are set, stretch backgrounds to fill the ENTIRE screen height
-            if global_bg_start_y is not None and global_bg_end_y is not None:
-                # Stretch the background to fill the ENTIRE screen height (not just between boundaries)
-                # This ensures NO white space anywhere
-                stretched_img = pygame.transform.scale(bg_img, (img_width, WINDOW_HEIGHT))
-                temp = stretched_img.copy()
-                temp.set_alpha(180)  # Semi-transparent in editor
-                
-                # ALWAYS draw from top of screen (0) to bottom of screen
-                # Draw to fill the ENTIRE screen, covering every single pixel
-                if repeat:
-                    # Draw repeating background horizontally - cover entire viewport
-                    anim_offset = 0
-                    if animated:
-                        anim_offset = int(animation_time * animation_speed) % img_width
-                    
-                    # Calculate start position to ensure full coverage - start well before viewport
-                    base_x = (-camera_x - anim_offset) % img_width
-                    start_x = base_x - img_width * 2  # Start 2 images before viewport
-                    # Extend well beyond viewport to ensure complete coverage
-                    end_x = viewport_width + img_width * 3
-                    
-                    # Draw repeating stretched background covering full screen height
-                    # Make absolutely sure we cover the entire width with no gaps
-                    for x in range(start_x, end_x, img_width):
-                        # Draw the full stretched image from top (0) to bottom (WINDOW_HEIGHT)
-                        # No conditions - always draw to fill screen
-                        screen.blit(temp, (x, 0))
-                else:
-                    # For non-repeating backgrounds, TILE them horizontally to cover full width
-                    # This ensures no white gaps on the sides
-                    x_pos = layer.get("x", 0)
-                    screen_x = x_pos - camera_x
-                    
-                    # Tile horizontally to cover ENTIRE viewport width - no gaps allowed
-                    # Calculate proper tiling to ensure full coverage
-                    # Start from well before viewport edge (at least 2 images before)
-                    base_offset = int(screen_x) % img_width
-                    start_x = -base_offset - img_width * 2
-                    # Extend well beyond viewport edge
-                    end_x = viewport_width + img_width * 3
-                    
-                    # Draw tiled instances covering full screen
-                    for x in range(start_x, end_x, img_width):
-                        # Draw the full stretched image from top (0) to bottom (WINDOW_HEIGHT)
-                        # No conditions - always draw to fill screen
-                        screen.blit(temp, (x, 0))
-                continue  # Skip the normal drawing code
-            
-            # Normal drawing (no global bounds or only one bound set)
+            # Normal drawing - show backgrounds at their actual size in the editor
             screen_y = y_pos - camera_y
             
             # Check if layer should be drawn based on global vertical bounds
@@ -1475,8 +1464,8 @@ def main():
                 pygame.draw.line(border_surf, (*border_color_rgb, border_alpha), (0, bottom_y), (viewport_width, bottom_y), 2)
                 screen.blit(border_surf, (0, 0))
 
-        # grid lines - skip in background_bounds mode
-        if mode != "background_bounds":
+        # grid lines - skip in background_bounds mode (unless toggled on)
+        if mode != "background_bounds" or (mode == "background_bounds" and show_grid_in_bg_bounds):
             for col in range(start_col, end_col + 1):
                 x = col * TILE_WIDTH - camera_x
                 pygame.draw.line(screen, GRID_COLOR, (x, 0), (x, WINDOW_HEIGHT), 1)
@@ -1532,51 +1521,48 @@ def main():
                     is_near_end = True
             
             # Draw global start_y line (top boundary - cyan)
-            if global_bg_start_y is not None:
-                screen_start_y = global_bg_start_y - camera_y
-                if -50 < screen_start_y < WINDOW_HEIGHT + 50:
-                    # Highlight if dragging or near mouse
-                    if dragging_boundary_line == "start":
-                        color = (0, 255, 255)  # Bright cyan when dragging
-                        line_width = 4
-                    elif is_near_start:
-                        color = (100, 255, 255)  # Light cyan when hovered
-                        line_width = 3
-                    else:
-                        color = (100, 200, 200)  # Dim cyan normally
-                        line_width = 2
-                    pygame.draw.line(screen, color, (0, screen_start_y), (viewport_width, screen_start_y), line_width)
-                    # Draw label
-                    label_text = "TOP (Drag to move)" if dragging_boundary_line == "start" or is_near_start else "TOP - Global Background Boundary"
-                    text = font.render(label_text, True, color)
-                    screen.blit(text, (10, screen_start_y - 15))
+            # Borders are always set by default, so always draw them
+            screen_start_y = global_bg_start_y - camera_y
+            if -50 < screen_start_y < WINDOW_HEIGHT + 50:
+                # Highlight if dragging or near mouse
+                if dragging_boundary_line == "start":
+                    color = (0, 255, 255)  # Bright cyan when dragging
+                    line_width = 4
+                elif is_near_start:
+                    color = (100, 255, 255)  # Light cyan when hovered
+                    line_width = 3
+                else:
+                    color = (100, 200, 200)  # Dim cyan normally
+                    line_width = 2
+                label_text = "TOP (Drag to move)" if dragging_boundary_line == "start" or is_near_start else "TOP - Global Background Boundary"
+                pygame.draw.line(screen, color, (0, screen_start_y), (viewport_width, screen_start_y), line_width)
+                # Draw label
+                text = font.render(label_text, True, color)
+                screen.blit(text, (10, screen_start_y - 15))
             
             # Draw global end_y line (bottom boundary - magenta)
-            if global_bg_end_y is not None:
-                screen_end_y = global_bg_end_y - camera_y
-                if -50 < screen_end_y < WINDOW_HEIGHT + 50:
-                    # Highlight if dragging or near mouse
-                    if dragging_boundary_line == "end":
-                        color = (255, 100, 255)  # Bright magenta when dragging
-                        line_width = 4
-                    elif is_near_end:
-                        color = (255, 150, 255)  # Light magenta when hovered
-                        line_width = 3
-                    else:
-                        color = (200, 100, 200)  # Dim magenta normally
-                        line_width = 2
-                    pygame.draw.line(screen, color, (0, screen_end_y), (viewport_width, screen_end_y), line_width)
-                    # Draw label
-                    label_text = "BOTTOM (Drag to move)" if dragging_boundary_line == "end" or is_near_end else "BOTTOM - Global Background Boundary"
-                    text = font.render(label_text, True, color)
-                    screen.blit(text, (10, screen_end_y - 15))
+            # Borders are always set by default, so always draw them
+            screen_end_y = global_bg_end_y - camera_y
+            if -50 < screen_end_y < WINDOW_HEIGHT + 50:
+                # Highlight if dragging or near mouse
+                if dragging_boundary_line == "end":
+                    color = (255, 100, 255)  # Bright magenta when dragging
+                    line_width = 4
+                elif is_near_end:
+                    color = (255, 150, 255)  # Light magenta when hovered
+                    line_width = 3
+                else:
+                    color = (200, 100, 200)  # Dim magenta normally
+                    line_width = 2
+                label_text = "BOTTOM (Drag to move)" if dragging_boundary_line == "end" or is_near_end else "BOTTOM - Global Background Boundary"
+                pygame.draw.line(screen, color, (0, screen_end_y), (viewport_width, screen_end_y), line_width)
+                # Draw label
+                text = font.render(label_text, True, color)
+                screen.blit(text, (10, screen_end_y - 15))
             
-            # If no bounds set, show hint to create them
-            if global_bg_start_y is None and global_bg_end_y is None:
-                hint_text = font.render("HOW TO CREATE BOUNDS: Click & drag from the TOP or BOTTOM edge of any background", True, (255, 255, 0))
-                screen.blit(hint_text, (viewport_width // 2 - hint_text.get_width() // 2, 30))
-                hint_text2 = font.render("(Hover near the top/bottom edge of a background and click-drag to create the boundary line)", True, (200, 200, 200))
-                screen.blit(hint_text2, (viewport_width // 2 - hint_text2.get_width() // 2, 55))
+            # Show hint about dragging borders
+            hint_text = font.render("Drag the cyan (TOP) or magenta (BOTTOM) lines to adjust boundaries", True, (255, 255, 0))
+            screen.blit(hint_text, (viewport_width // 2 - hint_text.get_width() // 2, 30))
             
             # Show which background layer would be deleted (if right-clicking)
             closest_layer_idx = None
@@ -1589,65 +1575,66 @@ def main():
                     closest_dist = dist
                     closest_layer_idx = i
             
-            # Draw existing background layers with indicators
-            for i, layer in enumerate(bg_layers):
-                bg_id = layer.get("background_id", 0)
-                if bg_id == 0:
-                    continue
-                bg_img_data = bg_images.get(bg_id)
-                if not bg_img_data:
-                    continue
-                bg_img = bg_img_data['img']
-                layer_y = layer.get("y", 0)
-                repeat = layer.get("repeat", False)  # Default to False
-                img_width = bg_img.get_width()
-                screen_layer_y = layer_y - camera_y
-                
-                # Draw background layer indicator
-                if repeat:
-                    # Repeating: draw horizontal line
-                    if i == closest_layer_idx and closest_dist <= 50 ** 2:
-                        # Highlight layer that would be deleted
-                        pygame.draw.line(screen, (255, 0, 0), (0, screen_layer_y), (viewport_width, screen_layer_y), 3)
-                        delete_text = font.render("RIGHT-CLICK TO DELETE | R = toggle repeat", True, (255, 0, 0))
-                        screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
-                        layer_idx = layer.get("layer_index", 0)
-                        animated = layer.get("animated", False)
-                        anim_text = f" | ANIMATED: {animated} (A = toggle)" if repeat else ""
-                        bounds_text = ""
-                        if global_bg_start_y is not None or global_bg_end_y is not None:
-                            bounds_text = f" | GLOBAL BOUNDS: {global_bg_start_y if global_bg_start_y else '∞'} to {global_bg_end_y if global_bg_end_y else '∞'} (C = clear)"
-                        repeat_text = font.render(f"REPEAT: {repeat} (R = toggle) | INDEX: {layer_idx} (+/- = change){anim_text}{bounds_text}", True, (200, 200, 0))
-                        screen.blit(repeat_text, (viewport_width // 2 - repeat_text.get_width() // 2, screen_layer_y + 5))
-                    else:
-                        pygame.draw.line(screen, (100, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
-                else:
-                    # Non-repeating: draw at X position
-                    layer_x = layer.get("x", 0)
-                    screen_layer_x = layer_x - camera_x
-                    if -50 < screen_layer_x < viewport_width + 50:
-                        # Draw vertical line at X position
-                        if i == closest_layer_idx and closest_dist <= 30 ** 2:
-                            # Highlight if close to mouse
-                            pygame.draw.line(screen, (255, 200, 0), (screen_layer_x, screen_layer_y - 20), (screen_layer_x, screen_layer_y + img_height + 20), 3)
+            # Draw existing background layers with indicators (if enabled)
+            if show_bg_indicators:
+                for i, layer in enumerate(bg_layers):
+                    bg_id = layer.get("background_id", 0)
+                    if bg_id == 0:
+                        continue
+                    bg_img_data = bg_images.get(bg_id)
+                    if not bg_img_data:
+                        continue
+                    bg_img = bg_img_data['img']
+                    layer_y = layer.get("y", 0)
+                    repeat = layer.get("repeat", False)  # Default to False
+                    img_width = bg_img.get_width()
+                    screen_layer_y = layer_y - camera_y
+                    
+                    # Draw background layer indicator
+                    if repeat:
+                        # Repeating: draw horizontal line
+                        if i == closest_layer_idx and closest_dist <= 50 ** 2:
+                            # Highlight layer that would be deleted
+                            pygame.draw.line(screen, (255, 0, 0), (0, screen_layer_y), (viewport_width, screen_layer_y), 3)
+                            delete_text = font.render("RIGHT-CLICK TO DELETE | R = toggle repeat", True, (255, 0, 0))
+                            screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
                             layer_idx = layer.get("layer_index", 0)
                             animated = layer.get("animated", False)
-                            anim_text = f" | ANIMATED: {animated} (A = toggle)" if layer.get("repeat", False) else ""
+                            anim_text = f" | ANIMATED: {animated} (A = toggle)" if repeat else ""
                             bounds_text = ""
                             if global_bg_start_y is not None or global_bg_end_y is not None:
                                 bounds_text = f" | GLOBAL BOUNDS: {global_bg_start_y if global_bg_start_y else '∞'} to {global_bg_end_y if global_bg_end_y else '∞'} (C = clear)"
-                            drag_text = font.render(f"LEFT-CLICK & DRAG TO MOVE | R = toggle repeat | INDEX: {layer_idx} (+/- = change){anim_text}{bounds_text}", True, (255, 200, 0))
-                            screen.blit(drag_text, (screen_layer_x - drag_text.get_width() // 2, screen_layer_y - 35))
+                            repeat_text = font.render(f"REPEAT: {repeat} (R = toggle) | INDEX: {layer_idx} (+/- = change){anim_text}{bounds_text}", True, (200, 200, 0))
+                            screen.blit(repeat_text, (viewport_width // 2 - repeat_text.get_width() // 2, screen_layer_y + 5))
                         else:
-                            pygame.draw.line(screen, (150, 100, 100), (screen_layer_x, screen_layer_y - 10), (screen_layer_x, screen_layer_y + img_height + 10), 2)
-                        
-                        # Draw horizontal line at Y
-                        if i == closest_layer_idx and closest_dist <= 50 ** 2:
-                            pygame.draw.line(screen, (255, 0, 0), (0, screen_layer_y), (viewport_width, screen_layer_y), 2)
-                            delete_text = font.render("RIGHT-CLICK TO DELETE", True, (255, 0, 0))
-                            screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
-                        else:
-                            pygame.draw.line(screen, (150, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
+                            pygame.draw.line(screen, (100, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
+                    else:
+                        # Non-repeating: draw at X position
+                        layer_x = layer.get("x", 0)
+                        screen_layer_x = layer_x - camera_x
+                        if -50 < screen_layer_x < viewport_width + 50:
+                            # Draw vertical line at X position
+                            if i == closest_layer_idx and closest_dist <= 30 ** 2:
+                                # Highlight if close to mouse
+                                pygame.draw.line(screen, (255, 200, 0), (screen_layer_x, screen_layer_y - 20), (screen_layer_x, screen_layer_y + img_height + 20), 3)
+                                layer_idx = layer.get("layer_index", 0)
+                                animated = layer.get("animated", False)
+                                anim_text = f" | ANIMATED: {animated} (A = toggle)" if layer.get("repeat", False) else ""
+                                bounds_text = ""
+                                if global_bg_start_y is not None or global_bg_end_y is not None:
+                                    bounds_text = f" | GLOBAL BOUNDS: {global_bg_start_y if global_bg_start_y else '∞'} to {global_bg_end_y if global_bg_end_y else '∞'} (C = clear)"
+                                drag_text = font.render(f"LEFT-CLICK & DRAG TO MOVE | R = toggle repeat | INDEX: {layer_idx} (+/- = change){anim_text}{bounds_text}", True, (255, 200, 0))
+                                screen.blit(drag_text, (screen_layer_x - drag_text.get_width() // 2, screen_layer_y - 35))
+                            else:
+                                pygame.draw.line(screen, (150, 100, 100), (screen_layer_x, screen_layer_y - 10), (screen_layer_x, screen_layer_y + img_height + 10), 2)
+                            
+                            # Draw horizontal line at Y
+                            if i == closest_layer_idx and closest_dist <= 50 ** 2:
+                                pygame.draw.line(screen, (255, 0, 0), (0, screen_layer_y), (viewport_width, screen_layer_y), 2)
+                                delete_text = font.render("RIGHT-CLICK TO DELETE", True, (255, 0, 0))
+                                screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
+                            else:
+                                pygame.draw.line(screen, (150, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
             
             # Draw preview for placing new background (default: non-repeating, so show single instance)
             bg_img_data = bg_images.get(selected_bg_id)
@@ -1663,10 +1650,12 @@ def main():
                 # Show single instance preview (non-repeating by default)
                 if screen_x + img_width >= 0 and screen_x < viewport_width:
                     screen.blit(temp, (screen_x, screen_y))
-                # Draw horizontal line at Y position for new placement
-                pygame.draw.line(screen, (255, 255, 0), (0, mouse_y), (viewport_width, mouse_y), 2)
-                # Draw vertical line at X position
-                pygame.draw.line(screen, (255, 255, 0), (mouse_x, screen_y - 20), (mouse_x, screen_y + img_height + 20), 2)
+                # Only show preview lines if indicators are enabled
+                if show_bg_indicators:
+                    # Draw horizontal line at Y position for new placement
+                    pygame.draw.line(screen, (255, 255, 0), (0, mouse_y), (viewport_width, mouse_y), 2)
+                    # Draw vertical line at X position
+                    pygame.draw.line(screen, (255, 255, 0), (mouse_x, screen_y - 20), (mouse_x, screen_y + img_height + 20), 2)
 
         # draw lines - skip in background_bounds mode
         if mode != "background_bounds":
@@ -1755,13 +1744,14 @@ def main():
 
         # instructions
         if mode == "background_bounds":
+            grid_status = "ON" if show_grid_in_bg_bounds else "OFF"
+            indicators_status = "ON" if show_bg_indicators else "OFF"
             info_lines = [
                 f"map{map_id} | mode: BACKGROUND BOUNDS | camera: arrows/WASD | TAB to switch modes",
                 "This mode shows ONLY backgrounds and boundary lines (no tiles, mobs, lines, spawn)",
-                "Set the TOP boundary (cyan line): Click & drag from top edge of any background",
-                "Set the BOTTOM boundary (magenta line): Click & drag from bottom edge of any background",
-                "Drag the boundary lines to adjust them. Backgrounds will stretch to fill the entire screen height",
-                "C = clear bounds, S = save, ESC/Q = quit",
+                "LEFT-CLICK = Place background | RIGHT-CLICK = Delete background",
+                "T = Set TOP boundary (cyan) at mouse Y | B = Set BOTTOM boundary (magenta) at mouse Y",
+                f"Drag boundary lines to adjust them | G = toggle grid ({grid_status}) | H = toggle indicators ({indicators_status}) | C = clear bounds | S = save | ESC/Q = quit",
             ]
         else:
             info_lines = [

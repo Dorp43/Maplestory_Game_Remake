@@ -5,7 +5,7 @@ from maps.Map import Map
 
 
 class Game:
-    def __init__(self, width=0, height=0, fps=60, map_id=0):
+    def __init__(self, width=0, height=0, fps=60, map_id=1):
         pygame.init()
         self.run = True
         self.map_id = map_id
