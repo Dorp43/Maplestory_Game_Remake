@@ -231,6 +231,67 @@ class Player(pygame.sprite.Sprite):
                     # If player is standing on this line, skip it (it's a walkable surface)
                     if is_standing_on:
                         continue
+
+                    # Check if this line is connected to ANY line we are currently standing on
+                    # This handles the case where we are transitioning between lines but current_line_id is not set yet
+                    # or we are standing on a line but the probe points haven't reached the new line yet
+                    is_connected_to_standing = False
+                    
+                    # First, check if it's connected to current_line_id if we have one
+                    standing_line_ids = set()
+                    if self.current_line_id is not None:
+                        standing_line_ids.add(self.current_line_id)
+                    
+                    # Also check other lines we might be standing on (using the same logic as is_standing_on)
+                    # This is a bit expensive but necessary for robustness
+                    for other_line in self.collision_lines:
+                        if other_line is line: continue
+                        
+                        # Quick check if close enough
+                        if other_line["x2"] < self.rect.left - 50 or other_line["x1"] > self.rect.right + 50:
+                            continue
+                            
+                        o_x1, o_y1 = other_line["x1"], other_line["y1"]
+                        o_x2, o_y2 = other_line["x2"], other_line["y2"]
+                        
+                        if abs(o_x2 - o_x1) > 0.001:
+                            o_m = (o_y2 - o_y1) / (o_x2 - o_x1)
+                            o_b = o_y1 - o_m * o_x1
+                            
+                            for foot_x in probe_points:
+                                if min(o_x1, o_x2) <= foot_x <= max(o_x1, o_x2):
+                                    surface_y = o_m * foot_x + o_b
+                                    if abs(surface_y - self.rect.bottom) <= self.max_slope_step_down + 5:
+                                        standing_line_ids.add(id(other_line))
+                                        break
+                    
+                    if standing_line_ids:
+                        # Check if target line is connected to any standing line
+                        x1, y1 = line["x1"], line["y1"]
+                        x2, y2 = line["x2"], line["y2"]
+                        TOLERANCE = 5.0
+                        
+                        for s_id in standing_line_ids:
+                            # Find the line object
+                            s_line = None
+                            for l in self.collision_lines:
+                                if id(l) == s_id:
+                                    s_line = l
+                                    break
+                            if not s_line: continue
+                            
+                            c_x1, c_y1 = s_line["x1"], s_line["y1"]
+                            c_x2, c_y2 = s_line["x2"], s_line["y2"]
+                            
+                            if (abs(x1 - c_x1) < TOLERANCE and abs(y1 - c_y1) < TOLERANCE) or \
+                               (abs(x1 - c_x2) < TOLERANCE and abs(y1 - c_y2) < TOLERANCE) or \
+                               (abs(x2 - c_x1) < TOLERANCE and abs(y2 - c_y1) < TOLERANCE) or \
+                               (abs(x2 - c_x2) < TOLERANCE and abs(y2 - c_y2) < TOLERANCE):
+                                is_connected_to_standing = True
+                                break
+                    
+                    if is_connected_to_standing:
+                        continue
                     
                     # Otherwise, treat as barrier - check if player would intersect with it
                     # Check if line is in player's vertical range
@@ -252,8 +313,13 @@ class Player(pygame.sprite.Sprite):
                                     x_at_bottom = (y_at_bottom - b) / m
                                     
                                     # If line crosses player's vertical range, stop at line
-                                    if line_min_x <= x_at_top <= line_max_x or line_min_x <= x_at_bottom <= line_max_x:
-                                        self.rect.right = min(x_at_top, x_at_bottom) if m > 0 else max(x_at_top, x_at_bottom)
+                                    # We want the MINIMUM x that intersects (first point of contact)
+                                    valid_xs = []
+                                    if line_min_x <= x_at_top <= line_max_x: valid_xs.append(x_at_top)
+                                    if line_min_x <= x_at_bottom <= line_max_x: valid_xs.append(x_at_bottom)
+                                    
+                                    if valid_xs:
+                                        self.rect.right = min(valid_xs)
                     elif dx < 0:  # Moving left
                         # Check left edge
                         test_x = self.rect.left
@@ -266,8 +332,13 @@ class Player(pygame.sprite.Sprite):
                                     y_at_bottom = self.rect.bottom
                                     x_at_bottom = (y_at_bottom - b) / m
                                     
-                                    if line_min_x <= x_at_top <= line_max_x or line_min_x <= x_at_bottom <= line_max_x:
-                                        self.rect.left = max(x_at_top, x_at_bottom) if m > 0 else min(x_at_top, x_at_bottom)
+                                    # We want the MAXIMUM x that intersects (first point of contact from right)
+                                    valid_xs = []
+                                    if line_min_x <= x_at_top <= line_max_x: valid_xs.append(x_at_top)
+                                    if line_min_x <= x_at_bottom <= line_max_x: valid_xs.append(x_at_bottom)
+                                    
+                                    if valid_xs:
+                                        self.rect.left = max(valid_xs)
 
     def _handle_line_vertical_collision(self, dy):
         """Handle vertical collision with lines (walkable surfaces).
@@ -291,7 +362,7 @@ class Player(pygame.sprite.Sprite):
         ]
         
         # Build connection graph: map each endpoint to all line IDs that share it
-        ENDPOINT_TOLERANCE = 3.0  # Pixels - endpoints within this are considered connected
+        ENDPOINT_TOLERANCE = 5.0  # Increased slightly for better matching
         endpoint_to_line_ids = {}  # (x, y) -> set of line IDs (using id() since lines are dicts)
         
         for line in self.collision_lines:
@@ -348,7 +419,7 @@ class Player(pygame.sprite.Sprite):
                     connected_line_ids.update(line_ids)
         
         # Collect all valid surface positions for each probe point
-        valid_surfaces = []  # List of (surface_y, line, foot_x, gap_abs, priority)
+        valid_surfaces = []  # List of (surface_y, line, foot_x, gap_abs, priority, is_extended)
         
         # For each probe point, find the best surface from all lines
         for foot_x in probe_points:
@@ -368,14 +439,13 @@ class Player(pygame.sprite.Sprite):
                 
                 # Determine if this line is angled (not horizontal)
                 is_angled = abs(y2 - y1) > 1.0  # Has significant vertical component
-                line_angle = abs((y2 - y1) / (x2 - x1)) if abs(x2 - x1) > 0.001 else float('inf')
                 
                 # Determine if this line is the current line or connected to it
                 line_id = id(line)
                 is_current_line = (self.current_line_id == line_id)
                 is_connected = line_id in connected_line_ids
                 
-                # Calculate extended bounds based on line type
+                # Calculate extended bounds based on line type and movement direction
                 # Base extension
                 base_extension = 15
                 # Much more extension for angled lines (they need more tolerance)
@@ -388,10 +458,30 @@ class Player(pygame.sprite.Sprite):
                 elif is_connected:
                     base_extension = max(base_extension, 35)
                 
+                # Directional extension: extend more in the direction of movement
+                # This helps detect the next line when approaching a connection point
+                extension_left = base_extension
+                extension_right = base_extension
+                
+                # If moving right, extend more to the right to catch the next line early
+                if self.moving_right:
+                    extension_right = base_extension + 25  # Extra extension on right when moving right
+                # If moving left, extend more to the left
+                elif self.moving_left:
+                    extension_left = base_extension + 25  # Extra extension on left when moving left
+                
+                # For connected lines, always extend more in both directions for smooth transitions
+                if is_connected:
+                    extension_left = max(extension_left, 40)
+                    extension_right = max(extension_right, 40)
+                
                 # Check if foot_x is within extended bounds
-                extended_min = line_min_x - base_extension
-                extended_max = line_max_x + base_extension
+                extended_min = line_min_x - extension_left
+                extended_max = line_max_x + extension_right
                 within_bounds = extended_min <= foot_x <= extended_max
+                
+                # STRICT CHECK: Is it within the ACTUAL line bounds?
+                strictly_within = line_min_x <= foot_x <= line_max_x
                 
                 # Also check if we're at an endpoint (with tolerance)
                 # For angled lines, use larger tolerance
@@ -408,12 +498,72 @@ class Player(pygame.sprite.Sprite):
                         # Check if this endpoint is near our probe point
                         # For angled lines, be more generous
                         conn_tolerance = endpoint_tolerance * 1.5 if is_angled else endpoint_tolerance
-                        if abs(foot_x - endpoint[0]) < conn_tolerance:
-                            at_connection = True
-                            # Use the endpoint's Y for consistency
-                            connection_y = endpoint[1]
-                            connection_point = endpoint
-                            break
+                        
+                        # When moving right, extend tolerance to the right to catch connections early
+                        # When moving left, extend tolerance to the left
+                        if self.moving_right:
+                            # Extend tolerance to the right (looking ahead)
+                            if foot_x >= endpoint[0] - conn_tolerance and foot_x <= endpoint[0] + conn_tolerance * 2:
+                                at_connection = True
+                                connection_y = endpoint[1]
+                                connection_point = endpoint
+                                break
+                        elif self.moving_left:
+                            # Extend tolerance to the left (looking ahead)
+                            if foot_x >= endpoint[0] - conn_tolerance * 2 and foot_x <= endpoint[0] + conn_tolerance:
+                                at_connection = True
+                                connection_y = endpoint[1]
+                                connection_point = endpoint
+                                break
+                        else:
+                            # Not moving - use symmetric tolerance
+                            if abs(foot_x - endpoint[0]) < conn_tolerance:
+                                at_connection = True
+                                connection_y = endpoint[1]
+                                connection_point = endpoint
+                                break
+                
+                # Proactive detection: if we're on a line ending at a connection and moving toward it,
+                # check if this line starts at that connection point
+                if not (within_bounds or at_start or at_end or at_connection):
+                    # Check if we're approaching a connection point from the current line
+                    if self.current_line_id is not None and current_line:
+                        cx1, cy1 = current_line["x1"], current_line["y1"]
+                        cx2, cy2 = current_line["x2"], current_line["y2"]
+                        current_min_x = min(cx1, cx2)
+                        current_max_x = max(cx1, cx2)
+                        
+                        # Check if current line ends at a connection point we're approaching
+                        for endpoint, line_ids in endpoint_to_line_ids.items():
+                            endpoint_x, endpoint_y = endpoint
+                            
+                            # If moving right, check if current line ends at connection and we're approaching it
+                            if self.moving_right:
+                                # Current line ends at connection on the right
+                                if abs(current_max_x - endpoint_x) < 5.0 and abs(cy2 if cx2 > cx1 else cy1 - endpoint_y) < 5.0:
+                                    # This line starts at that connection point
+                                    if line_id in line_ids:
+                                        # Check if we're approaching from the left
+                                        if foot_x >= endpoint_x - 30 and foot_x <= endpoint_x + 15:
+                                            at_connection = True
+                                            connection_y = endpoint_y
+                                            connection_point = endpoint
+                                            within_bounds = True  # Treat as within bounds
+                                            break
+                            
+                            # If moving left, check if current line ends at connection and we're approaching it
+                            elif self.moving_left:
+                                # Current line ends at connection on the left
+                                if abs(current_min_x - endpoint_x) < 5.0 and abs(cy1 if cx1 < cx2 else cy2 - endpoint_y) < 5.0:
+                                    # This line starts at that connection point
+                                    if line_id in line_ids:
+                                        # Check if we're approaching from the right
+                                        if foot_x >= endpoint_x - 15 and foot_x <= endpoint_x + 30:
+                                            at_connection = True
+                                            connection_y = endpoint_y
+                                            connection_point = endpoint
+                                            within_bounds = True  # Treat as within bounds
+                                            break
                 
                 # For angled lines, also check if we're within Y range even if X is slightly outside
                 # This helps when player is moving horizontally on a slope
@@ -438,19 +588,12 @@ class Player(pygame.sprite.Sprite):
                 if abs(x2 - x1) > 0.001:
                     m = (y2 - y1) / (x2 - x1)
                     b = y1 - m * x1
-                    surface_y = m * foot_x + b
+                    # Clamp foot_x to actual line bounds to prevent extrapolation
+                    effective_x = max(line_min_x, min(line_max_x, foot_x))
+                    surface_y = m * effective_x + b
                 else:
-                    # Horizontal line
+                    # Horizontal line (Y constant)
                     surface_y = y1
-                
-                # For angled lines, verify the calculated Y is within reasonable range
-                # This prevents issues when X is way outside bounds but Y would be way off
-                if is_angled:
-                    # Allow generous Y tolerance for extended X bounds on angled lines
-                    y_tolerance = 50  # Very generous tolerance for angled lines
-                    if surface_y < line_min_y - y_tolerance or surface_y > line_max_y + y_tolerance:
-                        # Y is way outside line range, skip this line
-                        continue
                 
                 # At connection points, use the connection Y for consistency
                 if at_connection and connection_y is not None and connection_point is not None:
@@ -464,7 +607,7 @@ class Player(pygame.sprite.Sprite):
                             line_y_at_conn = y1
                         
                         # If lines are aligned, use connection Y; otherwise blend
-                        if abs(line_y_at_conn - connection_y) < 5.0:
+                        if abs(line_y_at_conn - connection_y) < 5.0:  # Increased tolerance
                             surface_y = connection_y
                         else:
                             blend = max(0, 1.0 - dist_to_connection / endpoint_tolerance)
@@ -479,7 +622,7 @@ class Player(pygame.sprite.Sprite):
                 
                 # CRITICAL: Much more generous for angled lines
                 if is_angled:
-                    tolerance_bottom = -25  # Very generous for angled lines
+                    tolerance_bottom = -35  # Very generous for angled lines (increased from -25)
                     max_step = self.max_slope_step_up + 15
                 
                 # More generous for current line
@@ -498,25 +641,44 @@ class Player(pygame.sprite.Sprite):
                 # Check if valid surface
                 if tolerance_bottom <= vertical_gap <= max_step:
                     gap_abs = abs(vertical_gap)
-                    # Priority: current line (1000), connected lines (500), others (0)
-                    # Extra priority for angled lines to prevent falling through
-                    priority = 1000 if is_current_line else (500 if is_connected else 0)
+                    
+                    # NEW SCORING SYSTEM:
+                    # Base priority
+                    priority = 0
+                    
+                    # 1. Current line bonus
+                    if is_current_line:
+                        if strictly_within:
+                            priority += 1000
+                        else:
+                            priority += 300 # Reduced bonus for extended segments
+                    
+                    # 2. Connected line bonus (high)
+                    if is_connected:
+                        priority += 500
+                    
+                    # 3. STRICTLY WITHIN BOUNDS bonus (Critical for preventing premature snaps)
+                    if strictly_within:
+                        priority += 200
+                    
+                    # 4. Angled line bonus (small, just to prefer slopes over flat if ambiguous)
                     if is_angled:
-                        priority += 100  # Extra priority for angled lines
-                    valid_surfaces.append((surface_y, line, foot_x, gap_abs, priority))
+                        priority += 50
+                    
+                    valid_surfaces.append((surface_y, line, foot_x, gap_abs, priority, not strictly_within))
         
-        # NEW MECHANISM: Select best surface using priority system
+        # NEW MECHANISM: Select best line based on priority and coverage
         if not valid_surfaces:
             self.current_line_id = None
             return
         
         # Group surfaces by line
-        line_surface_map = {}  # line_id -> list of (surface_y, foot_x, gap_abs, priority)
-        for surface_y, line, foot_x, gap_abs, priority in valid_surfaces:
+        line_surface_map = {}  # line_id -> list of (surface_y, foot_x, gap_abs, priority, is_extended)
+        for surface_y, line, foot_x, gap_abs, priority, is_extended in valid_surfaces:
             line_id = id(line)
             if line_id not in line_surface_map:
                 line_surface_map[line_id] = []
-            line_surface_map[line_id].append((surface_y, foot_x, gap_abs, priority))
+            line_surface_map[line_id].append((surface_y, foot_x, gap_abs, priority, is_extended))
         
         # Find the best line based on priority and coverage
         best_line_id = None
@@ -528,7 +690,11 @@ class Player(pygame.sprite.Sprite):
             # Priority is already in the surfaces, use the max priority
             max_priority = max(s[3] for s in surfaces)
             coverage = len(surfaces)
-            score = max_priority + coverage * 10  # Coverage adds to score
+            
+            # Bonus for having "strictly within" hits
+            strict_hits = sum(1 for s in surfaces if not s[4]) # s[4] is is_extended
+            
+            score = max_priority + coverage * 10 + strict_hits * 20
             
             # Get the actual line object
             line_obj = None
@@ -576,7 +742,9 @@ class Player(pygame.sprite.Sprite):
                 if abs(x2 - x1) > 0.001:
                     m = (y2 - y1) / (x2 - x1)
                     b = y1 - m * x1
-                    best_center_y = m * center_x + b
+                    # Clamp center_x to actual line bounds to prevent extrapolation
+                    effective_center_x = max(line_min_x, min(line_max_x, center_x))
+                    best_center_y = m * effective_center_x + b
                 else:
                     # Horizontal line
                     best_center_y = y1
@@ -585,7 +753,10 @@ class Player(pygame.sprite.Sprite):
                 for endpoint, line_ids in endpoint_to_line_ids.items():
                     if best_line_id in line_ids:
                         # Check if player is near this connection point
-                        if abs(center_x - endpoint[0]) < 10.0:
+                        # INCREASED BLEND RANGE for smoother transitions
+                        blend_range = 30.0 # Increased from 25.0
+                        
+                        if abs(center_x - endpoint[0]) < blend_range:
                             # Calculate line Y at connection point
                             if abs(x2 - x1) > 0.001:
                                 line_y_at_conn = m * endpoint[0] + b
@@ -594,14 +765,12 @@ class Player(pygame.sprite.Sprite):
                             
                             # Only use connection Y if it's very close to the line's Y at that point
                             # This prevents teleporting to positions where no line exists
-                            if abs(line_y_at_conn - endpoint[1]) < 3.0:
-                                # Lines are aligned - safe to use connection Y
+                            if abs(line_y_at_conn - endpoint[1]) < 5.0:  # Increased tolerance
                                 best_center_y = endpoint[1]
                                 use_connection_y = True
-                            elif abs(line_y_at_conn - endpoint[1]) < 8.0:
-                                # Lines are close - blend smoothly
+                            elif abs(line_y_at_conn - endpoint[1]) < 20.0:  # Increased blend range
                                 dist = abs(center_x - endpoint[0])
-                                blend = max(0, 1.0 - dist / 10.0)
+                                blend = max(0, 1.0 - dist / blend_range)
                                 best_center_y = best_center_y * (1 - blend) + endpoint[1] * blend
                                 use_connection_y = True
                             # If lines are not aligned, use the line's actual Y (don't teleport)
@@ -611,22 +780,8 @@ class Player(pygame.sprite.Sprite):
                 if abs(x2 - x1) > 0.001:
                     m = (y2 - y1) / (x2 - x1)
                     b = y1 - m * x1
-                    best_center_y = m * center_x + b
-                else:
-                    best_center_y = y1
-            
-            # Verify the calculated Y is reasonable for this line
-            # Check if Y is within the line's Y range (with tolerance)
-            y_tolerance = 50
-            if best_center_y < line_min_y - y_tolerance or best_center_y > line_max_y + y_tolerance:
-                # Y is way outside line range - this might cause teleportation
-                # Recalculate using line equation and clamp to line range
-                if abs(x2 - x1) > 0.001:
-                    m = (y2 - y1) / (x2 - x1)
-                    b = y1 - m * x1
-                    best_center_y = m * center_x + b
-                    # Clamp to line Y range
-                    best_center_y = max(line_min_y - 10, min(line_max_y + 10, best_center_y))
+                    effective_center_x = max(line_min_x, min(line_max_x, center_x))
+                    best_center_y = m * effective_center_x + b
                 else:
                     best_center_y = y1
             
@@ -635,7 +790,7 @@ class Player(pygame.sprite.Sprite):
             current_bottom = self.rect.bottom
             y_change = best_center_y - current_bottom
             
-            # For angled lines, be more generous with Y changes to allow following the slope
+            # For angled lines, be more generous with Y changes to allow slope following
             is_angled = abs(y2 - y1) > 1.0 if abs(x2 - x1) > 0.001 else False
             is_current = (best_line_id == self.current_line_id)
             
@@ -665,7 +820,8 @@ class Player(pygame.sprite.Sprite):
                         if abs(x2 - x1) > 0.001:
                             m = (y2 - y1) / (x2 - x1)
                             b = y1 - m * x1
-                            best_center_y = m * center_x + b
+                            effective_center_x = max(line_min_x, min(line_max_x, center_x))
+                            best_center_y = m * effective_center_x + b
                         else:
                             best_center_y = y1
                 else:
@@ -828,6 +984,3 @@ class Player(pygame.sprite.Sprite):
                 self.screen.blit(pygame.transform.flip(copy_of_image, self.flip, False), (screen_x, screen_y))
         else:
                 self.screen.blit(pygame.transform.flip(self.image, self.flip, False), (screen_x, screen_y))
- 
-
-
