@@ -156,6 +156,10 @@ def load_tile_images(base_dir: str, tile_entries):
 
 
 def load_or_create_grid(csv_path: str, cols: int, rows: int):
+    """
+    Load grid from CSV, preserving its EXACT dimensions from the file.
+    Only uses cols/rows as defaults when creating a NEW grid.
+    """
     if os.path.exists(csv_path):
         grid = []
         with open(csv_path, newline="") as f:
@@ -163,21 +167,26 @@ def load_or_create_grid(csv_path: str, cols: int, rows: int):
             for row in reader:
                 if not row:
                     continue
-                grid.append([int(cell) for cell in row if cell != ""])
+                grid.append([int(cell) if cell else 0 for cell in row])
 
         if grid:
-            if len(grid) > rows:
-                grid = grid[:rows]
-            else:
-                while len(grid) < rows:
-                    grid.append([0] * cols)
-            for r in range(rows):
-                if len(grid[r]) > cols:
-                    grid[r] = grid[r][:cols]
-                else:
-                    grid[r].extend([0] * (cols - len(grid[r])))
+            # Find the maximum column count to ensure all rows have the same width
+            max_cols = max(len(row) for row in grid) if grid else 0
+            actual_rows = len(grid)
+            
+            # Use the ACTUAL dimensions from the CSV file (preserve what was saved)
+            # Don't enforce minimum - preserve exact size
+            actual_cols = max_cols if max_cols > 0 else cols
+            
+            # Pad rows to match the widest row (ensure consistency)
+            for r in range(len(grid)):
+                if len(grid[r]) < actual_cols:
+                    grid[r].extend([0] * (actual_cols - len(grid[r])))
+            
+            # Return grid with its exact saved dimensions
             return grid
 
+    # Only use default size when creating a NEW grid (file doesn't exist)
     return [[0 for _ in range(cols)] for _ in range(rows)]
 
 
@@ -441,6 +450,7 @@ def main():
     mob_images = load_mob_images(base_dir, mob_types, TILE_HEIGHT)
     bg_images = load_background_images(base_dir, bg_entries)
 
+    # Load grid - it will preserve actual dimensions from CSV
     grid = load_or_create_grid(tiles_csv_path, GRID_COLS, GRID_ROWS)
     mobs = load_mobs(mobs_csv_path)
     lines = load_lines(lines_json_path)
@@ -713,13 +723,18 @@ def main():
                                 closest_idx = None
                                 closest_dist = 50 ** 2
                                 for i, layer in enumerate(bg_layers):
-                                    dy = layer.get("y", 0) - world_y
+                                    # Check distance to the Y position of the layer
+                                    layer_y = layer.get("y", 0)
+                                    dy = layer_y - world_y
                                     dist = dy * dy
                                     if dist <= closest_dist:
                                         closest_dist = dist
                                         closest_idx = i
                                 if closest_idx is not None:
-                                    bg_layers.pop(closest_idx)
+                                    deleted_layer = bg_layers.pop(closest_idx)
+                                    print(f"[map_editor] Deleted background layer at Y={deleted_layer.get('y', 0)}")
+                                else:
+                                    print(f"[map_editor] No background layer found near Y={world_y}")
                         elif mode == "spawn":
                             if event.button == 1:  # Left click - set spawn point
                                 spawn_point = {"x": world_x, "y": world_y}
@@ -745,23 +760,60 @@ def main():
                         # Convert screen delta to world delta (camera is locked, so this is accurate)
                         world_delta_x = screen_delta_x
                         # Calculate target columns with snap interval
+                        # Dragging right (positive delta) = shrink (remove columns from left)
+                        # Dragging left (negative delta) = expand (add columns to left)
                         delta_tiles = int(world_delta_x // TILE_WIDTH)
-                        target_cols = max(1, start_cols - delta_tiles)
+                        # Calculate base target: negative delta expands, positive shrinks
+                        base_target = start_cols - delta_tiles
                         # Snap to interval
-                        target_cols = (target_cols // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
-                        if target_cols < 1:
-                            target_cols = RESIZE_SNAP_INTERVAL
+                        if base_target < start_cols:
+                            # Shrinking: round down
+                            target_cols = (base_target // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
+                        else:
+                            # Expanding: round up
+                            target_cols = ((base_target + RESIZE_SNAP_INTERVAL - 1) // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
+                        target_cols = max(1, target_cols)
                         
                         # Only resize if different from current
                         if target_cols != current_cols:
+                            cols_delta = target_cols - current_cols
                             # Adjust grid
                             for row in grid:
                                 if target_cols < current_cols:
                                     # Remove columns from left
-                                    row[:] = row[current_cols - target_cols:]
+                                    cols_removed = current_cols - target_cols
+                                    row[:] = row[cols_removed:]
                                 else:
                                     # Add columns to left
                                     row[:0] = [0] * (target_cols - current_cols)
+                            
+                            # Adjust all world coordinates to maintain visual position
+                            if cols_delta < 0:
+                                # Shrinking from left - move everything left by the removed width
+                                shift_x = abs(cols_delta) * TILE_WIDTH
+                                # Adjust spawn point
+                                spawn_point["x"] = max(0, spawn_point["x"] - shift_x)
+                                # Adjust lines
+                                for line in lines:
+                                    line["p1"][0] = max(0, line["p1"][0] - shift_x)
+                                    line["p2"][0] = max(0, line["p2"][0] - shift_x)
+                                # Adjust mobs
+                                for mob in mobs:
+                                    mob["x"] = max(0, mob["x"] - shift_x)
+                                # Background layers don't need adjustment (they use Y only)
+                            elif cols_delta > 0:
+                                # Expanding from left - move everything right by the added width
+                                shift_x = cols_delta * TILE_WIDTH
+                                # Adjust spawn point
+                                spawn_point["x"] += shift_x
+                                # Adjust lines
+                                for line in lines:
+                                    line["p1"][0] += shift_x
+                                    line["p2"][0] += shift_x
+                                # Adjust mobs
+                                for mob in mobs:
+                                    mob["x"] += shift_x
+                            
                             # Adjust camera to keep view stable (maintain screen position)
                             camera_x = start_cam_x + (target_cols - start_cols) * TILE_WIDTH
                     elif dragging_border == "right":
@@ -791,22 +843,64 @@ def main():
                         screen_delta_y = event.pos[1] - drag_start_screen_pos
                         world_delta_y = screen_delta_y
                         # Calculate target rows with snap interval
+                        # Dragging down (positive delta) = shrink (remove rows from top)
+                        # Dragging up (negative delta) = expand (add rows to top)
                         delta_tiles = int(world_delta_y // TILE_HEIGHT)
-                        target_rows = max(1, start_rows - delta_tiles)
+                        # Calculate base target: negative delta expands, positive shrinks
+                        base_target = start_rows - delta_tiles
                         # Snap to interval
-                        target_rows = (target_rows // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
-                        if target_rows < 1:
-                            target_rows = RESIZE_SNAP_INTERVAL
+                        if base_target < start_rows:
+                            # Shrinking: round down
+                            target_rows = (base_target // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
+                        else:
+                            # Expanding: round up
+                            target_rows = ((base_target + RESIZE_SNAP_INTERVAL - 1) // RESIZE_SNAP_INTERVAL) * RESIZE_SNAP_INTERVAL
+                        target_rows = max(1, target_rows)
                         
                         # Only resize if different from current
                         if target_rows != current_rows:
+                            rows_delta = target_rows - current_rows
                             # Adjust grid
                             if target_rows < current_rows:
                                 # Remove rows from top
-                                grid[:] = grid[current_rows - target_rows:]
+                                rows_removed = current_rows - target_rows
+                                grid[:] = grid[rows_removed:]
                             else:
                                 # Add rows to top
                                 grid[:0] = [[0] * len(grid[0]) for _ in range(target_rows - current_rows)]
+                            
+                            # Adjust all world coordinates to maintain visual position
+                            if rows_delta < 0:
+                                # Shrinking from top - move everything up by the removed height
+                                shift_y = abs(rows_delta) * TILE_HEIGHT
+                                # Adjust spawn point
+                                spawn_point["y"] = max(0, spawn_point["y"] - shift_y)
+                                # Adjust lines
+                                for line in lines:
+                                    line["p1"][1] = max(0, line["p1"][1] - shift_y)
+                                    line["p2"][1] = max(0, line["p2"][1] - shift_y)
+                                # Adjust mobs
+                                for mob in mobs:
+                                    mob["y"] = max(0, mob["y"] - shift_y)
+                                # Adjust background layers
+                                for layer in bg_layers:
+                                    layer["y"] = max(0, layer["y"] - shift_y)
+                            elif rows_delta > 0:
+                                # Expanding from top - move everything down by the added height
+                                shift_y = rows_delta * TILE_HEIGHT
+                                # Adjust spawn point
+                                spawn_point["y"] += shift_y
+                                # Adjust lines
+                                for line in lines:
+                                    line["p1"][1] += shift_y
+                                    line["p2"][1] += shift_y
+                                # Adjust mobs
+                                for mob in mobs:
+                                    mob["y"] += shift_y
+                                # Adjust background layers
+                                for layer in bg_layers:
+                                    layer["y"] += shift_y
+                            
                             # Adjust camera to keep view stable
                             camera_y = start_cam_y + (target_rows - start_rows) * TILE_HEIGHT
                     elif dragging_border == "bottom":
@@ -973,10 +1067,47 @@ def main():
                 screen.blit(temp, rect)
 
         if mode == "backgrounds" and viewport_rect.collidepoint(mouse_x, mouse_y):
+            world_y = camera_y + mouse_y
+            
+            # Show which background layer would be deleted (if right-clicking)
+            closest_layer_idx = None
+            closest_dist = 50 ** 2
+            for i, layer in enumerate(bg_layers):
+                layer_y = layer.get("y", 0)
+                dy = layer_y - world_y
+                dist = dy * dy
+                if dist <= closest_dist:
+                    closest_dist = dist
+                    closest_layer_idx = i
+            
+            # Draw existing background layers with indicators
+            for i, layer in enumerate(bg_layers):
+                bg_id = layer.get("background_id", 0)
+                if bg_id == 0:
+                    continue
+                bg_img_data = bg_images.get(bg_id)
+                if not bg_img_data:
+                    continue
+                bg_img = bg_img_data['img']
+                layer_y = layer.get("y", 0)
+                img_width = bg_img.get_width()
+                screen_layer_y = layer_y - camera_y
+                
+                # Highlight layer that would be deleted
+                if i == closest_layer_idx and closest_dist <= 50 ** 2:
+                    # Draw red highlight line
+                    pygame.draw.line(screen, (255, 0, 0), (0, screen_layer_y), (viewport_width, screen_layer_y), 3)
+                    # Draw delete indicator
+                    delete_text = font.render("RIGHT-CLICK TO DELETE", True, (255, 0, 0))
+                    screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
+                else:
+                    # Draw subtle line for other layers
+                    pygame.draw.line(screen, (100, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
+            
+            # Draw preview for placing new background
             bg_img_data = bg_images.get(selected_bg_id)
             if bg_img_data:
                 bg_img = bg_img_data['img']
-                world_y = camera_y + mouse_y
                 img_width = bg_img.get_width()
                 img_height = bg_img.get_height()
                 # Draw preview repeating horizontally
@@ -987,7 +1118,7 @@ def main():
                 temp.set_alpha(160)
                 for x in range(start_x, end_x, img_width):
                     screen.blit(temp, (x, screen_y))
-                # Draw horizontal line at Y position
+                # Draw horizontal line at Y position for new placement
                 pygame.draw.line(screen, (255, 255, 0), (0, mouse_y), (viewport_width, mouse_y), 2)
 
         # draw lines
@@ -1084,7 +1215,7 @@ def main():
             "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
             f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
             f"Lines: Left click = start/end line (auto-connects), Right click = cancel/delete, T = toggle type ({line_type})",
-            f"Backgrounds: Left click = place layer at Y, Right click = delete, +/- = change layer index ({current_layer_index}), R = resize map",
+            f"Backgrounds: Left click = place layer at Y, Right click = delete layer (click near Y position), +/- = change layer index ({current_layer_index}), R = resize map",
             f"Spawn: Left click = set spawn point (current: {spawn_point['x']}, {spawn_point['y']})",
             "Map Resize: In tiles mode, drag map borders (highlighted in yellow) to resize",
             "S = save tiles, mobs, lines, backgrounds & spawn, ESC/Q = quit",
