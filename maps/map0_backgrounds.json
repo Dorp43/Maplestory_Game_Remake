@@ -2,27 +2,47 @@
   "layers": [
     {
       "background_id": 6,
-      "y": 735,
+      "y": 1095,
       "layer_index": 0,
       "scroll_speed": 1.0
     },
     {
       "background_id": 8,
-      "y": 2395,
+      "y": 2755,
       "layer_index": 0,
       "scroll_speed": 1.0
     },
     {
       "background_id": 2,
-      "y": 2,
+      "y": 245,
       "layer_index": 0,
-      "scroll_speed": 1.0
+      "scroll_speed": 1.0,
+      "repeat": true,
+      "x": 0
     },
     {
       "background_id": 7,
-      "y": 344,
-      "layer_index": 2,
-      "scroll_speed": 1.0
+      "y": 702,
+      "layer_index": 0,
+      "scroll_speed": 1.0,
+      "repeat": true,
+      "x": 0
+    },
+    {
+      "background_id": 3,
+      "y": 653,
+      "layer_index": 0,
+      "scroll_speed": 1.0,
+      "repeat": true,
+      "x": 3
+    },
+    {
+      "background_id": 4,
+      "y": 386,
+      "layer_index": 0,
+      "scroll_speed": 1.0,
+      "repeat": false,
+      "x": 968
     }
   ]
 }

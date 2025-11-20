@@ -438,14 +438,21 @@ class Map:
         try:
             with open(json_path, "r") as f:
                 data = json.load(f)
-                self.background_layers = data.get("layers", [])
+                layers = data.get("layers", [])
+                # Set default repeat to False if not specified (backward compatibility)
+                for layer in layers:
+                    if "repeat" not in layer:
+                        layer["repeat"] = False
+                    if "x" not in layer and not layer.get("repeat", False):
+                        layer["x"] = 0  # Default X for non-repeating
+                self.background_layers = layers
                 # Sort layers by layer_index (lower = drawn first/behind)
                 self.background_layers.sort(key=lambda l: l.get("layer_index", 0))
         except Exception as e:
             print(f"[Map] Error loading backgrounds: {e}")
 
     def draw_backgrounds(self, surface, camera_x=0, camera_y=0):
-        """Draw all background layers with horizontal repeating."""
+        """Draw all background layers with optional horizontal repeating."""
         screen_width = surface.get_width()
         screen_height = surface.get_height()
         
@@ -461,23 +468,34 @@ class Map:
             # Get layer properties
             y_pos = layer.get("y", 0)
             scroll_speed = layer.get("scroll_speed", 1.0)  # Parallax effect (1.0 = normal, <1.0 = slower)
+            repeat = layer.get("repeat", False)  # Default to False (non-repeating)
             
             # Calculate scroll offset with parallax
             scroll_x = int(camera_x * scroll_speed)
             img_width = bg_img.get_width()
             img_height = bg_img.get_height()
+            screen_y = y_pos - camera_y
             
-            # Calculate how many times to repeat horizontally
-            # Start from leftmost visible position
-            start_x = -scroll_x % img_width - img_width
-            end_x = screen_width + img_width
-            
-            # Draw repeating background
-            for x in range(start_x, end_x, img_width):
-                screen_y = y_pos - camera_y
-                # Only draw if layer is visible on screen
-                if screen_y + img_height >= 0 and screen_y < screen_height:
-                    surface.blit(bg_img, (x, screen_y))
+            # Only draw if layer is visible on screen vertically
+            if screen_y + img_height >= 0 and screen_y < screen_height:
+                if repeat:
+                    # Draw repeating background - cover entire horizontal space
+                    # Calculate how many times to repeat horizontally
+                    # Start from leftmost visible position
+                    start_x = -scroll_x % img_width - img_width
+                    # Extend well beyond screen to ensure full coverage
+                    end_x = screen_width + img_width * 2
+                    
+                    # Draw repeating background
+                    for x in range(start_x, end_x, img_width):
+                        surface.blit(bg_img, (x, screen_y))
+                else:
+                    # Draw single instance (no repeating)
+                    x_pos = layer.get("x", 0)  # X position for non-repeating backgrounds
+                    screen_x = x_pos - scroll_x
+                    # Only draw if visible on screen
+                    if screen_x + img_width >= 0 and screen_x < screen_width:
+                        surface.blit(bg_img, (screen_x, screen_y))
 
     def load_spawn_from_json(self, map_id: int):
         """Load spawn point from map{id}_spawn.json."""

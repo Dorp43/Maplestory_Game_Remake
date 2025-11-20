@@ -471,6 +471,11 @@ def main():
     current_mob_index = 0
     current_layer_index = 0  # Z-order for backgrounds (lower = behind)
     
+    # Background dragging state
+    dragging_background = None  # Index of background being dragged, or None
+    drag_bg_start_pos = None  # (world_x, world_y) when drag started
+    drag_bg_start_layer_pos = None  # (x, y) of layer when drag started
+    
     # Border dragging state
     dragging_border = None  # "left", "right", "top", "bottom", or None
     drag_start_pos = None  # World position when drag started
@@ -526,6 +531,53 @@ def main():
                     if mode == "backgrounds":
                         current_layer_index = max(0, current_layer_index - 1)
                 elif event.key == pygame.K_r and mode == "backgrounds":
+                    # Toggle repeat for closest background layer
+                    # Get current mouse position
+                    current_mouse_x, current_mouse_y = pygame.mouse.get_pos()
+                    if viewport_rect.collidepoint(current_mouse_x, current_mouse_y):
+                        # Convert screen Y to world Y
+                        world_y = camera_y + current_mouse_y
+                        closest_idx = None
+                        closest_dist = 50 ** 2
+                        for i, layer in enumerate(bg_layers):
+                            layer_y = layer.get("y", 0)
+                            dy = layer_y - world_y
+                            dist = dy * dy
+                            if dist <= closest_dist:
+                                closest_dist = dist
+                                closest_idx = i
+                        if closest_idx is not None:
+                            # Toggle repeat
+                            current_repeat = bg_layers[closest_idx].get("repeat", False)  # Default to False
+                            bg_layers[closest_idx]["repeat"] = not current_repeat
+                            if not bg_layers[closest_idx]["repeat"]:
+                                # If setting to non-repeating, set X position to current mouse X
+                                if "x" not in bg_layers[closest_idx]:
+                                    bg_layers[closest_idx]["x"] = camera_x + current_mouse_x
+                            print(f"[map_editor] Background layer at Y={bg_layers[closest_idx].get('y', 0)} repeat={not current_repeat}")
+                        else:
+                            print(f"[map_editor] No background layer found near mouse Y position")
+                    else:
+                        # If mouse not in viewport, find closest layer to camera center
+                        if bg_layers:
+                            # Find layer closest to center of viewport
+                            center_y = camera_y + WINDOW_HEIGHT // 2
+                            closest_idx = None
+                            closest_dist = float('inf')
+                            for i, layer in enumerate(bg_layers):
+                                layer_y = layer.get("y", 0)
+                                dist = abs(layer_y - center_y)
+                                if dist < closest_dist:
+                                    closest_dist = dist
+                                    closest_idx = i
+                            if closest_idx is not None:
+                                current_repeat = bg_layers[closest_idx].get("repeat", False)  # Default to False
+                                bg_layers[closest_idx]["repeat"] = not current_repeat
+                                if not bg_layers[closest_idx]["repeat"]:
+                                    if "x" not in bg_layers[closest_idx]:
+                                        bg_layers[closest_idx]["x"] = camera_x + viewport_width // 2
+                                print(f"[map_editor] Background layer at Y={bg_layers[closest_idx].get('y', 0)} repeat={not current_repeat}")
+                elif event.key == pygame.K_m and mode == "backgrounds":
                     # Resize map to fit backgrounds perfectly
                     optimal_width = calculate_optimal_map_width(bg_layers, bg_images)
                     optimal_cols = max(len(grid[0]) if grid else GRID_COLS, int(math.ceil(optimal_width / TILE_WIDTH)))
@@ -694,31 +746,64 @@ def main():
                                     if closest_line_idx is not None:
                                         lines.pop(closest_line_idx)
                         elif mode == "backgrounds":
-                            if event.button == 1:  # Left click - place background layer
+                            if event.button == 1:  # Left click - place or drag background layer
                                 if selected_bg_id != 0:
-                                    # Check if layer already exists at this Y position
-                                    existing_idx = None
+                                    # Check if clicking on existing background layer to drag it
+                                    closest_idx = None
+                                    closest_dist = 30 ** 2  # 30 pixel threshold for clicking
                                     for i, layer in enumerate(bg_layers):
-                                        if abs(layer.get("y", 0) - world_y) < 10:
-                                            existing_idx = i
-                                            break
+                                        layer_y = layer.get("y", 0)
+                                        layer_x = layer.get("x", 0) if not layer.get("repeat", False) else None
+                                        dy = layer_y - world_y
+                                        dist_y = dy * dy
+                                        
+                                        # For non-repeating, also check X distance
+                                        if layer_x is not None:
+                                            dx = layer_x - world_x
+                                            dist = dx * dx + dist_y
+                                        else:
+                                            # For repeating, only check Y
+                                            dist = dist_y
+                                        
+                                        if dist <= closest_dist:
+                                            closest_dist = dist
+                                            closest_idx = i
                                     
-                                    if existing_idx is not None:
-                                        # Update existing layer
-                                        bg_layers[existing_idx] = {
-                                            "background_id": selected_bg_id,
-                                            "y": world_y,
-                                            "layer_index": current_layer_index,
-                                            "scroll_speed": 1.0
-                                        }
+                                    if closest_idx is not None:
+                                        # Start dragging existing background
+                                        dragging_background = closest_idx
+                                        drag_bg_start_pos = (world_x, world_y)
+                                        layer = bg_layers[closest_idx]
+                                        drag_bg_start_layer_pos = (layer.get("x", 0), layer.get("y", 0))
                                     else:
-                                        # Add new layer
-                                        bg_layers.append({
-                                            "background_id": selected_bg_id,
-                                            "y": world_y,
-                                            "layer_index": current_layer_index,
-                                            "scroll_speed": 1.0
-                                        })
+                                        # Check if layer already exists at this Y position (for repeating backgrounds)
+                                        existing_idx = None
+                                        for i, layer in enumerate(bg_layers):
+                                            if layer.get("repeat", False) and abs(layer.get("y", 0) - world_y) < 10:
+                                                existing_idx = i
+                                                break
+                                        
+                                        if existing_idx is not None:
+                                            # Update existing layer
+                                            existing_layer = bg_layers[existing_idx]
+                                            bg_layers[existing_idx] = {
+                                                "background_id": selected_bg_id,
+                                                "y": world_y,
+                                                "layer_index": current_layer_index,
+                                                "scroll_speed": existing_layer.get("scroll_speed", 1.0),
+                                                "repeat": existing_layer.get("repeat", False),
+                                                "x": existing_layer.get("x", 0)  # Preserve X for non-repeating
+                                            }
+                                        else:
+                                            # Add new layer (default: NON-repeating)
+                                            bg_layers.append({
+                                                "background_id": selected_bg_id,
+                                                "y": world_y,
+                                                "layer_index": current_layer_index,
+                                                "scroll_speed": 1.0,
+                                                "repeat": False,  # Default to NON-repeating
+                                                "x": world_x  # X position for non-repeating backgrounds
+                                            })
                             elif event.button == 3:  # Right click - delete layer
                                 closest_idx = None
                                 closest_dist = 50 ** 2
@@ -745,7 +830,39 @@ def main():
                     drag_start_screen_pos = None
                     drag_start_grid_size = None
                     drag_start_camera = None
+                    dragging_background = None
+                    drag_bg_start_pos = None
+                    drag_bg_start_layer_pos = None
             elif event.type == pygame.MOUSEMOTION:
+                # Calculate world coordinates for mouse
+                if viewport_rect.collidepoint(event.pos):
+                    world_mouse_x = camera_x + event.pos[0]
+                    world_mouse_y = camera_y + event.pos[1]
+                else:
+                    world_mouse_x = None
+                    world_mouse_y = None
+                
+                # Handle background dragging
+                if dragging_background is not None and drag_bg_start_pos is not None and drag_bg_start_layer_pos is not None and world_mouse_x is not None:
+                    if dragging_background < len(bg_layers):
+                        layer = bg_layers[dragging_background]
+                        start_world_x, start_world_y = drag_bg_start_pos
+                        start_layer_x, start_layer_y = drag_bg_start_layer_pos
+                        
+                        # Calculate delta from drag start
+                        delta_x = world_mouse_x - start_world_x
+                        delta_y = world_mouse_y - start_world_y
+                        
+                        # Update layer position
+                        if layer.get("repeat", False):
+                            # For repeating backgrounds, only move Y
+                            layer["y"] = start_layer_y + delta_y
+                        else:
+                            # For non-repeating backgrounds, move both X and Y
+                            layer["x"] = start_layer_x + delta_x
+                            layer["y"] = start_layer_y + delta_y
+                
+                # Handle border dragging
                 if dragging_border and drag_start_pos is not None and drag_start_screen_pos is not None and drag_start_grid_size is not None and drag_start_camera is not None:
                     # Lock camera during drag - use screen coordinates for stable calculation
                     start_cam_x, start_cam_y = drag_start_camera
@@ -939,20 +1056,28 @@ def main():
                 continue
             bg_img = bg_img_data['img']
             y_pos = layer.get("y", 0)
+            repeat = layer.get("repeat", False)  # Default to False
             img_width = bg_img.get_width()
             img_height = bg_img.get_height()
-            
-            # Draw repeating background horizontally
-            start_x = -camera_x % img_width - img_width
-            end_x = viewport_width + img_width
             screen_y = y_pos - camera_y
             
-            # Only draw if visible
+            # Only draw if visible vertically
             if screen_y + img_height >= 0 and screen_y < WINDOW_HEIGHT:
-                for x in range(start_x, end_x, img_width):
-                    temp = bg_img.copy()
-                    temp.set_alpha(180)  # Semi-transparent in editor
-                    screen.blit(temp, (x, screen_y))
+                temp = bg_img.copy()
+                temp.set_alpha(180)  # Semi-transparent in editor
+                
+                if repeat:
+                    # Draw repeating background horizontally
+                    start_x = -camera_x % img_width - img_width
+                    end_x = viewport_width + img_width
+                    for x in range(start_x, end_x, img_width):
+                        screen.blit(temp, (x, screen_y))
+                else:
+                    # Draw single instance (non-repeating)
+                    x_pos = layer.get("x", 0)
+                    screen_x = x_pos - camera_x
+                    if screen_x + img_width >= 0 and screen_x < viewport_width:
+                        screen.blit(temp, (screen_x, screen_y))
 
         # draw tiles (only visible region)
         actual_cols = len(grid[0]) if grid else GRID_COLS
@@ -1090,36 +1215,62 @@ def main():
                     continue
                 bg_img = bg_img_data['img']
                 layer_y = layer.get("y", 0)
+                repeat = layer.get("repeat", False)  # Default to False
                 img_width = bg_img.get_width()
                 screen_layer_y = layer_y - camera_y
                 
-                # Highlight layer that would be deleted
-                if i == closest_layer_idx and closest_dist <= 50 ** 2:
-                    # Draw red highlight line
-                    pygame.draw.line(screen, (255, 0, 0), (0, screen_layer_y), (viewport_width, screen_layer_y), 3)
-                    # Draw delete indicator
-                    delete_text = font.render("RIGHT-CLICK TO DELETE", True, (255, 0, 0))
-                    screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
+                # Draw background layer indicator
+                if repeat:
+                    # Repeating: draw horizontal line
+                    if i == closest_layer_idx and closest_dist <= 50 ** 2:
+                        # Highlight layer that would be deleted
+                        pygame.draw.line(screen, (255, 0, 0), (0, screen_layer_y), (viewport_width, screen_layer_y), 3)
+                        delete_text = font.render("RIGHT-CLICK TO DELETE | R = toggle repeat", True, (255, 0, 0))
+                        screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
+                        repeat_text = font.render(f"REPEAT: {repeat} (Press R to toggle)", True, (200, 200, 0))
+                        screen.blit(repeat_text, (viewport_width // 2 - repeat_text.get_width() // 2, screen_layer_y + 5))
+                    else:
+                        pygame.draw.line(screen, (100, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
                 else:
-                    # Draw subtle line for other layers
-                    pygame.draw.line(screen, (100, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
+                    # Non-repeating: draw at X position
+                    layer_x = layer.get("x", 0)
+                    screen_layer_x = layer_x - camera_x
+                    if -50 < screen_layer_x < viewport_width + 50:
+                        # Draw vertical line at X position
+                        if i == closest_layer_idx and closest_dist <= 30 ** 2:
+                            # Highlight if close to mouse
+                            pygame.draw.line(screen, (255, 200, 0), (screen_layer_x, screen_layer_y - 20), (screen_layer_x, screen_layer_y + img_height + 20), 3)
+                            drag_text = font.render("LEFT-CLICK & DRAG TO MOVE | R = toggle repeat", True, (255, 200, 0))
+                            screen.blit(drag_text, (screen_layer_x - drag_text.get_width() // 2, screen_layer_y - 35))
+                        else:
+                            pygame.draw.line(screen, (150, 100, 100), (screen_layer_x, screen_layer_y - 10), (screen_layer_x, screen_layer_y + img_height + 10), 2)
+                        
+                        # Draw horizontal line at Y
+                        if i == closest_layer_idx and closest_dist <= 50 ** 2:
+                            pygame.draw.line(screen, (255, 0, 0), (0, screen_layer_y), (viewport_width, screen_layer_y), 2)
+                            delete_text = font.render("RIGHT-CLICK TO DELETE", True, (255, 0, 0))
+                            screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
+                        else:
+                            pygame.draw.line(screen, (150, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
             
-            # Draw preview for placing new background
+            # Draw preview for placing new background (default: non-repeating, so show single instance)
             bg_img_data = bg_images.get(selected_bg_id)
             if bg_img_data:
                 bg_img = bg_img_data['img']
                 img_width = bg_img.get_width()
                 img_height = bg_img.get_height()
-                # Draw preview repeating horizontally
-                start_x = -camera_x % img_width - img_width
-                end_x = viewport_width + img_width
+                world_x = camera_x + mouse_x
                 screen_y = world_y - camera_y
+                screen_x = world_x - camera_x
                 temp = bg_img.copy()
                 temp.set_alpha(160)
-                for x in range(start_x, end_x, img_width):
-                    screen.blit(temp, (x, screen_y))
+                # Show single instance preview (non-repeating by default)
+                if screen_x + img_width >= 0 and screen_x < viewport_width:
+                    screen.blit(temp, (screen_x, screen_y))
                 # Draw horizontal line at Y position for new placement
                 pygame.draw.line(screen, (255, 255, 0), (0, mouse_y), (viewport_width, mouse_y), 2)
+                # Draw vertical line at X position
+                pygame.draw.line(screen, (255, 255, 0), (mouse_x, screen_y - 20), (mouse_x, screen_y + img_height + 20), 2)
 
         # draw lines
         for line in lines:
@@ -1215,7 +1366,7 @@ def main():
             "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
             f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
             f"Lines: Left click = start/end line (auto-connects), Right click = cancel/delete, T = toggle type ({line_type})",
-            f"Backgrounds: Left click = place layer at Y, Right click = delete layer (click near Y position), +/- = change layer index ({current_layer_index}), R = resize map",
+            f"Backgrounds: Left click = place, Left click & drag = move (non-repeating), Right click = delete, R = toggle repeat, +/- = layer index ({current_layer_index}), M = resize map",
             f"Spawn: Left click = set spawn point (current: {spawn_point['x']}, {spawn_point['y']})",
             "Map Resize: In tiles mode, drag map borders (highlighted in yellow) to resize",
             "S = save tiles, mobs, lines, backgrounds & spawn, ESC/Q = quit",
