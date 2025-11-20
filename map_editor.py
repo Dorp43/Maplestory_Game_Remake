@@ -526,10 +526,74 @@ def main():
                     save_spawn(spawn_json_path, spawn_point)
                 elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                     if mode == "backgrounds":
-                        current_layer_index = min(10, current_layer_index + 1)
+                        # Get current mouse position to find hovered background
+                        current_mouse_x, current_mouse_y = pygame.mouse.get_pos()
+                        if viewport_rect.collidepoint(current_mouse_x, current_mouse_y):
+                            world_y = camera_y + current_mouse_y
+                            world_x = camera_x + current_mouse_x
+                            closest_idx = None
+                            closest_dist = 50 ** 2
+                            for i, layer in enumerate(bg_layers):
+                                layer_y = layer.get("y", 0)
+                                layer_x = layer.get("x", 0) if not layer.get("repeat", False) else None
+                                dy = layer_y - world_y
+                                dist_y = dy * dy
+                                
+                                if layer_x is not None:
+                                    dx = layer_x - world_x
+                                    dist = dx * dx + dist_y
+                                else:
+                                    dist = dist_y
+                                
+                                if dist <= closest_dist:
+                                    closest_dist = dist
+                                    closest_idx = i
+                            
+                            if closest_idx is not None:
+                                # Increase layer index for hovered background
+                                current_idx = bg_layers[closest_idx].get("layer_index", 0)
+                                bg_layers[closest_idx]["layer_index"] = min(10, current_idx + 1)
+                                print(f"[map_editor] Background layer index increased to {bg_layers[closest_idx]['layer_index']}")
+                            else:
+                                # No background hovered, change global index for new backgrounds
+                                current_layer_index = min(10, current_layer_index + 1)
+                        else:
+                            current_layer_index = min(10, current_layer_index + 1)
                 elif event.key == pygame.K_MINUS:
                     if mode == "backgrounds":
-                        current_layer_index = max(0, current_layer_index - 1)
+                        # Get current mouse position to find hovered background
+                        current_mouse_x, current_mouse_y = pygame.mouse.get_pos()
+                        if viewport_rect.collidepoint(current_mouse_x, current_mouse_y):
+                            world_y = camera_y + current_mouse_y
+                            world_x = camera_x + current_mouse_x
+                            closest_idx = None
+                            closest_dist = 50 ** 2
+                            for i, layer in enumerate(bg_layers):
+                                layer_y = layer.get("y", 0)
+                                layer_x = layer.get("x", 0) if not layer.get("repeat", False) else None
+                                dy = layer_y - world_y
+                                dist_y = dy * dy
+                                
+                                if layer_x is not None:
+                                    dx = layer_x - world_x
+                                    dist = dx * dx + dist_y
+                                else:
+                                    dist = dist_y
+                                
+                                if dist <= closest_dist:
+                                    closest_dist = dist
+                                    closest_idx = i
+                            
+                            if closest_idx is not None:
+                                # Decrease layer index for hovered background
+                                current_idx = bg_layers[closest_idx].get("layer_index", 0)
+                                bg_layers[closest_idx]["layer_index"] = max(0, current_idx - 1)
+                                print(f"[map_editor] Background layer index decreased to {bg_layers[closest_idx]['layer_index']}")
+                            else:
+                                # No background hovered, change global index for new backgrounds
+                                current_layer_index = max(0, current_layer_index - 1)
+                        else:
+                            current_layer_index = max(0, current_layer_index - 1)
                 elif event.key == pygame.K_r and mode == "backgrounds":
                     # Toggle repeat for closest background layer
                     # Get current mouse position
@@ -1227,7 +1291,8 @@ def main():
                         pygame.draw.line(screen, (255, 0, 0), (0, screen_layer_y), (viewport_width, screen_layer_y), 3)
                         delete_text = font.render("RIGHT-CLICK TO DELETE | R = toggle repeat", True, (255, 0, 0))
                         screen.blit(delete_text, (viewport_width // 2 - delete_text.get_width() // 2, screen_layer_y - 20))
-                        repeat_text = font.render(f"REPEAT: {repeat} (Press R to toggle)", True, (200, 200, 0))
+                        layer_idx = layer.get("layer_index", 0)
+                        repeat_text = font.render(f"REPEAT: {repeat} (R = toggle) | INDEX: {layer_idx} (+/- = change)", True, (200, 200, 0))
                         screen.blit(repeat_text, (viewport_width // 2 - repeat_text.get_width() // 2, screen_layer_y + 5))
                     else:
                         pygame.draw.line(screen, (100, 100, 100), (0, screen_layer_y), (viewport_width, screen_layer_y), 1)
@@ -1240,7 +1305,8 @@ def main():
                         if i == closest_layer_idx and closest_dist <= 30 ** 2:
                             # Highlight if close to mouse
                             pygame.draw.line(screen, (255, 200, 0), (screen_layer_x, screen_layer_y - 20), (screen_layer_x, screen_layer_y + img_height + 20), 3)
-                            drag_text = font.render("LEFT-CLICK & DRAG TO MOVE | R = toggle repeat", True, (255, 200, 0))
+                            layer_idx = layer.get("layer_index", 0)
+                            drag_text = font.render(f"LEFT-CLICK & DRAG TO MOVE | R = toggle repeat | INDEX: {layer_idx} (+/- = change)", True, (255, 200, 0))
                             screen.blit(drag_text, (screen_layer_x - drag_text.get_width() // 2, screen_layer_y - 35))
                         else:
                             pygame.draw.line(screen, (150, 100, 100), (screen_layer_x, screen_layer_y - 10), (screen_layer_x, screen_layer_y + img_height + 10), 2)
