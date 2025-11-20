@@ -7,7 +7,7 @@ from entities.HealthBar import HealthBar
 
 
 class Player(pygame.sprite.Sprite):
-    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles, slope_tiles=None, map_bounds=None):
+    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles, slope_tiles=None, lines=None, map_bounds=None):
         pygame.sprite.Sprite.__init__(self)
         self.alive = True
         self.screen = screen
@@ -22,6 +22,7 @@ class Player(pygame.sprite.Sprite):
         # list of pygame.Rect for solid tiles / platforms
         self.tiles = tiles
         self.slope_tiles = slope_tiles or []
+        self.lines = lines or []
         self.max_slope_step_up = 60
         self.max_slope_step_down = 25
         # Map boundaries: (min_x, max_x, min_y, max_y) - None means no boundaries
@@ -123,30 +124,84 @@ class Player(pygame.sprite.Sprite):
             self.vel_x
         dx += self.vel_x
 
-        # --- horizontal movement & collision against tiles ---
+        # --- Line Collision Logic ---
+        
+        # Horizontal movement
         self.rect.x += dx
-        for tile in self.tiles:
-            if self.rect.colliderect(tile):
-                if dx > 0:
-                    self.rect.right = tile.left
-                elif dx < 0:
-                    self.rect.left = tile.right
+        
+        # Check wall collisions
+        for line in self.lines:
+            if line.get('type') == 'wall':
+                p1 = line['p1']
+                p2 = line['p2']
+                # Simple AABB check first
+                line_min_x = min(p1[0], p2[0])
+                line_max_x = max(p1[0], p2[0])
+                line_min_y = min(p1[1], p2[1])
+                line_max_y = max(p1[1], p2[1])
+                
+                if self.rect.right > line_min_x and self.rect.left < line_max_x and \
+                   self.rect.bottom > line_min_y and self.rect.top < line_max_y:
+                    
+                    # Determine side
+                    if dx > 0: # Moving right
+                        self.rect.right = line_min_x
+                    elif dx < 0: # Moving left
+                        self.rect.left = line_max_x
 
-        # --- vertical movement & collision against tiles ---
+        # Vertical movement
         self.rect.y += dy
         self.in_air = True
-        for tile in self.tiles:
-            if self.rect.colliderect(tile):
-                if self.vel_y > 0:  # falling
-                    self.rect.bottom = tile.top
-                    self.vel_y = 0
-                    self.in_air = False
-                elif self.vel_y < 0:  # jumping up
-                    self.rect.top = tile.bottom
-                    self.vel_y = 0
+        
+        # Check floor collisions
+        ground_y = None
+        
+        # We only check for ground if we are falling or on ground
+        if self.vel_y >= 0:
+            foot_x = self.rect.centerx
+            foot_y = self.rect.bottom
+            
+            # Find the highest floor line that we are currently above or crossing
+            for line in self.lines:
+                if line.get('type') == 'floor':
+                    p1 = line['p1']
+                    p2 = line['p2']
+                    
+                    # Check if x is within line segment
+                    if min(p1[0], p2[0]) <= foot_x <= max(p1[0], p2[0]):
+                        # Calculate line y at foot_x
+                        if p2[0] != p1[0]:
+                            slope = (p2[1] - p1[1]) / (p2[0] - p1[0])
+                            line_y = p1[1] + slope * (foot_x - p1[0])
+                        else:
+                            line_y = min(p1[1], p2[1]) # Vertical floor? Should not happen but handle it
+                            
+                        # Check if we crossed it or are near it
+                        # We allow snapping if we are slightly above it or just crossed it
+                        # dy is the amount we moved down this frame
+                        # previous_bottom = foot_y - dy
+                        
+                        # Tolerance for snapping
+                        if foot_y >= line_y - 5 and foot_y <= line_y + max(10, self.vel_y + 5):
+                            if ground_y is None or line_y < ground_y:
+                                ground_y = line_y
 
-        if self.slope_tiles:
-            self._handle_slope_collision()
+        if ground_y is not None:
+            self.rect.bottom = ground_y
+            self.vel_y = 0
+            self.in_air = False
+            
+        # Fallback to old tile collision if no lines (optional, but good for backward compat)
+        if not self.lines:
+             for tile in self.tiles:
+                if self.rect.colliderect(tile):
+                    if self.vel_y > 0:  # falling
+                        self.rect.bottom = tile.top
+                        self.vel_y = 0
+                        self.in_air = False
+                    elif self.vel_y < 0:  # jumping up
+                        self.rect.top = tile.bottom
+                        self.vel_y = 0
 
         # Clamp player to map boundaries if provided
         if self.map_bounds:

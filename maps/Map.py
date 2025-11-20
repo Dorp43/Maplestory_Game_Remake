@@ -17,6 +17,7 @@ class Map:
         self.tiles = []
         self.tile_grid = []
         self.slope_tiles = []
+        self.lines = []
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(base_dir)
@@ -34,6 +35,7 @@ class Map:
         self.map_id = map_id
         # load collision / platform tiles for this map from CSV
         self.load_tiles_from_csv(map_id)
+        self.load_lines_from_json(map_id)
 
         mobs_from_csv = self.load_mobs_from_csv(map_id)
         if mobs_from_csv:
@@ -358,3 +360,20 @@ class Map:
     def get_mobs(self):
         """Returns mobs list."""
         return self.mobs
+
+    def load_lines_from_json(self, map_id: int):
+        """Load collision lines from map{id}_lines.json."""
+        self.lines = []
+        json_path = os.path.join(
+            os.path.dirname(__file__),
+            f"map{map_id}_lines.json"
+        )
+        
+        if not os.path.exists(json_path):
+            return
+
+        try:
+            with open(json_path, "r") as f:
+                self.lines = json.load(f)
+        except Exception as e:
+            print(f"[Map] Error loading lines: {e}")
