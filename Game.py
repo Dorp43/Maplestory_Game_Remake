@@ -180,6 +180,7 @@ class Game:
             self.mobs,
             self.map.tiles,
             self.map.slope_tiles,
+            lines=self.map.lines,
             map_bounds=map_bounds,
         )
         self.players.add(player)

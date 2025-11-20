@@ -61,7 +61,8 @@ def get_paths(map_id: int):
     base_dir = os.path.dirname(os.path.abspath(__file__))
     tiles_csv_path = os.path.join(base_dir, "maps", f"map{map_id}_tiles.csv")
     mobs_csv_path = os.path.join(base_dir, "maps", f"map{map_id}_mobs.csv")
-    return base_dir, tiles_csv_path, mobs_csv_path
+    lines_json_path = os.path.join(base_dir, "maps", f"map{map_id}_lines.json")
+    return base_dir, tiles_csv_path, mobs_csv_path, lines_json_path
 
 
 def discover_mob_types(base_dir: str):
@@ -229,6 +230,47 @@ def save_mobs(csv_path: str, mobs):
     print(f"[map_editor] Saved mobs to {csv_path}")
 
 
+def load_lines(json_path: str):
+    if not os.path.exists(json_path):
+        return []
+    try:
+        with open(json_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading lines: {e}")
+        return []
+
+
+def save_lines(json_path: str, lines):
+    try:
+        with open(json_path, "w") as f:
+            json.dump(lines, f, indent=2)
+        print(f"[map_editor] Saved lines to {json_path}")
+    except Exception as e:
+        print(f"Error saving lines: {e}")
+
+
+def get_snapped_point(lines, world_x, world_y, threshold=15):
+    """Find a point to snap to within threshold distance."""
+    best_pt = None
+    min_dist = threshold * threshold
+    
+    points = []
+    for line in lines:
+        points.append(tuple(line['p1']))
+        points.append(tuple(line['p2']))
+        
+    for pt in points:
+        dx = pt[0] - world_x
+        dy = pt[1] - world_y
+        dist = dx*dx + dy*dy
+        if dist < min_dist:
+            min_dist = dist
+            best_pt = pt
+            
+    return best_pt
+
+
 def load_mob_images(base_dir: str, mob_types, target_height: int):
     mob_images = {}
     for name in mob_types:
@@ -260,7 +302,7 @@ def main():
     else:
         map_id = DEFAULT_MAP_ID
 
-    base_dir, tiles_csv_path, mobs_csv_path = get_paths(map_id)
+    base_dir, tiles_csv_path, mobs_csv_path, lines_json_path = get_paths(map_id)
     tile_entries = load_tile_manifest(base_dir)
     mob_types = discover_mob_types(base_dir)
 
@@ -277,6 +319,7 @@ def main():
 
     grid = load_or_create_grid(tiles_csv_path, GRID_COLS, GRID_ROWS)
     mobs = load_mobs(mobs_csv_path)
+    lines = load_lines(lines_json_path)
 
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 20)
@@ -287,8 +330,13 @@ def main():
 
     palette_scroll = 0
     selected_tile_id = 0
-    mode = "tiles"
+    selected_tile_id = 0
+    mode = "tiles"  # tiles, mobs, lines
     current_mob_index = 0
+    
+    # Line editing state
+    line_start_point = None
+    line_type = "floor" # floor, wall
 
     running = True
     while running:
@@ -320,8 +368,14 @@ def main():
                 elif event.key == pygame.K_s:
                     save_grid(tiles_csv_path, grid)
                     save_mobs(mobs_csv_path, mobs)
+                    save_lines(lines_json_path, lines)
                 elif event.key == pygame.K_TAB:
-                    mode = "mobs" if mode == "tiles" else "tiles"
+                    if mode == "tiles": mode = "mobs"
+                    elif mode == "mobs": mode = "lines"
+                    else: mode = "tiles"
+                    line_start_point = None
+                elif event.key == pygame.K_t and mode == "lines":
+                    line_type = "wall" if line_type == "floor" else "floor"
                 elif event.key in (pygame.K_LEFT, pygame.K_a):
                     move_left = True
                 elif event.key in (pygame.K_RIGHT, pygame.K_d):
@@ -389,6 +443,41 @@ def main():
                                         closest_idx = i
                                 if closest_idx is not None:
                                     mobs.pop(closest_idx)
+                        elif mode == "lines":
+                            if event.button == 1: # Left click
+                                # Check for snap
+                                snap_pt = get_snapped_point(lines, world_x, world_y)
+                                pt = snap_pt if snap_pt else (world_x, world_y)
+                                
+                                if line_start_point is None:
+                                    line_start_point = pt
+                                else:
+                                    # Finish line
+                                    lines.append({
+                                        "p1": line_start_point,
+                                        "p2": pt,
+                                        "type": line_type
+                                    })
+                                    line_start_point = pt # Continue from this point
+                            elif event.button == 3: # Right click - cancel or delete
+                                if line_start_point:
+                                    line_start_point = None
+                                else:
+                                    # Delete nearest line
+                                    closest_line_idx = None
+                                    min_dist = 20 * 20
+                                    for i, line in enumerate(lines):
+                                        # Check distance to p1 and p2
+                                        p1 = line['p1']
+                                        p2 = line['p2']
+                                        d1 = (p1[0]-world_x)**2 + (p1[1]-world_y)**2
+                                        d2 = (p2[0]-world_x)**2 + (p2[1]-world_y)**2
+                                        if d1 < min_dist or d2 < min_dist:
+                                            min_dist = min(d1, d2)
+                                            closest_line_idx = i
+                                    
+                                    if closest_line_idx is not None:
+                                        lines.pop(closest_line_idx)
 
         # --- drawing ---
         screen.fill(VIEWPORT_BG)
@@ -450,6 +539,36 @@ def main():
                 rect = temp.get_rect(center=(mouse_x, mouse_y))
                 screen.blit(temp, rect)
 
+        # draw lines
+        for line in lines:
+            p1 = (line['p1'][0] - camera_x, line['p1'][1] - camera_y)
+            p2 = (line['p2'][0] - camera_x, line['p2'][1] - camera_y)
+            color = (0, 255, 0) if line.get('type') == 'floor' else (255, 0, 0)
+            pygame.draw.line(screen, color, p1, p2, 3)
+            pygame.draw.circle(screen, (255, 255, 255), (int(p1[0]), int(p1[1])), 3)
+            pygame.draw.circle(screen, (255, 255, 255), (int(p2[0]), int(p2[1])), 3)
+
+        if mode == "lines":
+            # Draw cursor snap indicator
+            world_x = camera_x + mouse_x
+            world_y = camera_y + mouse_y
+            snap_pt = get_snapped_point(lines, world_x, world_y)
+            
+            cursor_color = (0, 255, 0) if line_type == 'floor' else (255, 0, 0)
+            
+            if snap_pt:
+                sx, sy = snap_pt
+                pygame.draw.circle(screen, (255, 255, 0), (sx - camera_x, sy - camera_y), 6, 2)
+                
+            if line_start_point:
+                p1 = (line_start_point[0] - camera_x, line_start_point[1] - camera_y)
+                p2 = (mouse_x, mouse_y)
+                if snap_pt:
+                    p2 = (snap_pt[0] - camera_x, snap_pt[1] - camera_y)
+                
+                pygame.draw.line(screen, cursor_color, p1, p2, 2)
+                pygame.draw.circle(screen, (255, 255, 255), (int(p1[0]), int(p1[1])), 3)
+
         # palette
         pygame.draw.rect(screen, PALETTE_BG, palette_rect)
         y_offset = 10 - palette_scroll
@@ -482,10 +601,11 @@ def main():
 
         # instructions
         info_lines = [
-            f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs",
+            f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs/lines",
             "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
             f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
-            "S = save tiles & mobs, ESC/Q = quit",
+            f"Lines: Left click = start/end line (auto-connects), Right click = cancel/delete, T = toggle type ({line_type})",
+            "S = save tiles, mobs & lines, ESC/Q = quit",
         ]
         y = 5
         for line in info_lines:
