@@ -5,6 +5,8 @@ from maps.Map import Map
 from screens.MainMenu import MainMenu
 from screens.MultiplayerMenu import MultiplayerMenu
 from enum import Enum
+from Network import Network
+import uuid
 
 class GameState(Enum):
     MENU = 0
@@ -20,6 +22,10 @@ class Game:
         self.map_id = map_id
         self.map = None
         self.players = pygame.sprite.Group()
+        self.remote_players = {} # id -> Player
+        self.player_id = str(uuid.uuid4())
+        self.username = ""
+        self.network = None
         self.mobs = pygame.sprite.Group()
         self.gravity = 0.75
         self.fps = fps
@@ -58,7 +64,8 @@ class Game:
         
     def connect_multiplayer(self, username, ip):
         print(f"Connecting to {ip} as {username}")
-        # Here we would initialize networking
+        self.username = username
+        self.network = Network(ip)
         self.state = GameState.GAME
         
     def back_to_main(self):
@@ -198,6 +205,89 @@ class Game:
                         player.move(self.gravity)
 
                     self.handle_controls(player, events)
+                    
+                    # --- Networking ---
+                    if self.network:
+                        # Prepare data to send
+                        data = {
+                            'id': self.player_id,
+                            'username': self.username,
+                            'x': player.rect.x,
+                            'y': player.rect.y,
+                            'action': player.action,
+                            'frame_index': player.frame_index,
+                            'flip': player.flip,
+                            'char_type': player.char_type,
+                            'hp': player.health,
+                            'max_hp': player.max_health
+                        }
+                        
+                        # Send and receive
+                        all_players_data = self.network.send(data)
+                        
+                        # Process received data
+                        if all_players_data:
+                            current_remote_ids = set()
+                            
+                            for addr, p_data in all_players_data.items():
+                                if not p_data: continue
+                                pid = p_data.get('id')
+                                
+                                # Skip ourselves
+                                if pid == self.player_id:
+                                    continue
+                                    
+                                current_remote_ids.add(pid)
+                                
+                                # Update or Create remote player
+                                if pid in self.remote_players:
+                                    remote_p = self.remote_players[pid]
+                                    remote_p.rect.x = p_data['x']
+                                    remote_p.rect.y = p_data['y']
+                                    remote_p.action = p_data['action']
+                                    remote_p.frame_index = p_data['frame_index']
+                                    remote_p.flip = p_data['flip']
+                                    remote_p.health = p_data['hp']
+                                    # Update animation manually since we don't call update()
+                                    remote_p.image = remote_p.animation_list[remote_p.action][remote_p.frame_index]
+                                    
+                                else:
+                                    # Create new remote player
+                                    new_p = Player(
+                                        self.screen,
+                                        p_data['char_type'],
+                                        p_data['x'],
+                                        p_data['y'],
+                                        1, # scale
+                                        3, # speed (irrelevant)
+                                        p_data['max_hp'],
+                                        None, # mobs
+                                        None, # tiles
+                                    )
+                                    self.remote_players[pid] = new_p
+                                    
+                            # Remove disconnected players
+                            disconnected_ids = set(self.remote_players.keys()) - current_remote_ids
+                            for pid in disconnected_ids:
+                                del self.remote_players[pid]
+                                
+                            # Draw remote players
+                            for pid, remote_p in self.remote_players.items():
+                                remote_p.draw(self.camera_x, self.camera_y)
+                                # Draw username
+                                # Find the username from the data (we need to find the data again or store it)
+                                # Optimization: Store username in remote_p or look it up
+                                # Let's just look it up from all_players_data for now, it's inefficient but fine for small player count
+                                p_name = "Unknown"
+                                for p_data in all_players_data.values():
+                                    if p_data and p_data.get('id') == pid:
+                                        p_name = p_data.get('username', 'Unknown')
+                                        break
+                                
+                                font = pygame.font.SysFont("Arial", 14)
+                                name_surf = font.render(p_name, True, (255, 255, 255))
+                                name_rect = name_surf.get_rect(center=(remote_p.rect.centerx - self.camera_x, remote_p.rect.top - 10 - self.camera_y))
+                                self.screen.blit(name_surf, name_rect)
 
             # draws cursor
             # Scale mouse position from display coordinates to virtual coordinates

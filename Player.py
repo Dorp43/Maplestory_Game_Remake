@@ -7,7 +7,7 @@ from entities.HealthBar import HealthBar
 
 
 class Player(pygame.sprite.Sprite):
-    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles, slope_tiles=None, lines=None, map_bounds=None):
+    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs=None, tiles=None, slope_tiles=None, lines=None, map_bounds=None):
         pygame.sprite.Sprite.__init__(self)
         self.alive = True
         self.screen = screen
@@ -18,9 +18,9 @@ class Player(pygame.sprite.Sprite):
         self.vel_x = 0
         self.max_health = health
         self.health = health
-        self.mobs = mobs
+        self.mobs = mobs or pygame.sprite.Group()
         # list of pygame.Rect for solid tiles / platforms
-        self.tiles = tiles
+        self.tiles = tiles or []
         self.slope_tiles = slope_tiles or []
         self.lines = lines or []
         self.current_floor = None
