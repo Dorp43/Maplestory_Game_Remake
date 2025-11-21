@@ -2,12 +2,21 @@ import pygame
 from Player import Player
 from mobs.Mob import Mob
 from maps.Map import Map
+from screens.MainMenu import MainMenu
+from screens.MultiplayerMenu import MultiplayerMenu
+from enum import Enum
+
+class GameState(Enum):
+    MENU = 0
+    MULTIPLAYER_MENU = 1
+    GAME = 2
 
 
 class Game:
     def __init__(self, width=0, height=0, fps=60, map_id=1):
         pygame.init()
         self.run = True
+        self.state = GameState.MENU
         self.map_id = map_id
         self.map = None
         self.players = pygame.sprite.Group()
@@ -27,8 +36,33 @@ class Game:
         self.camera_x = 0
         self.camera_y = 0
         self.initialize_game()
+        self.initialize_game()
+        
+        # Initialize Menus
+        self.main_menu = MainMenu(self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT, 
+                                  self.start_singleplayer, self.open_multiplayer, self.quit_game)
+        self.multiplayer_menu = MultiplayerMenu(self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT, 
+                                                self.connect_multiplayer, self.back_to_main)
+        
         self.load_map(map_id)
         self.game_loop()
+
+    def start_singleplayer(self):
+        self.state = GameState.GAME
+        
+    def open_multiplayer(self):
+        self.state = GameState.MULTIPLAYER_MENU
+        
+    def quit_game(self):
+        self.run = False
+        
+    def connect_multiplayer(self, username, ip):
+        print(f"Connecting to {ip} as {username}")
+        # Here we would initialize networking
+        self.state = GameState.GAME
+        
+    def back_to_main(self):
+        self.state = GameState.MENU
 
     def initialize_game(self):
         """ Initializes general settings """
@@ -101,53 +135,76 @@ class Game:
         """ Game loop main method """
         while self.run:
             dt = self.clock.tick(self.fps)
-            # Update animation time for backgrounds
-            if self.map:
-                self.map.animation_time += dt / 1000.0  # Convert to seconds
-            self.draw_bg()
-
-            for mob in self.mobs:
-                mob.update(self.camera_x, self.camera_y)
-                mob.draw(self.camera_x, self.camera_y)
-            for player in self.players:
-                # Update camera to follow player (before updating player so health bar uses correct camera)
-                self.update_camera(player)
-                player.update(self.camera_x, self.camera_y)
-                player.draw(self.camera_x, self.camera_y)
-                player.projectiles_group.update(self.mobs, player)
-                # Draw projectiles with camera offset
-                for projectile in player.projectiles_group:
-                    screen_x = projectile.rect.x - self.camera_x
-                    screen_y = projectile.rect.y - self.camera_y
-                    self.screen.blit(projectile.image, (screen_x, screen_y))
-                player.skills_group.update(player)
-                # Draw skills with camera offset
-                for skill in player.skills_group:
-                    screen_x = skill.rect.x - self.camera_x
-                    screen_y = skill.rect.y - self.camera_y
-                    self.screen.blit(skill.image, (screen_x, screen_y))
-
-                # update player actions
-                if player.alive:
-                    if player.attack:
-                        player.update_action(player.next_attack)
-                    elif player.in_air:
-                        player.update_action(2)  # 2: jump
-                    elif player.moving_left or player.moving_right:
-                        player.update_action(1)  # 1: run
-                    elif player.skill_big_star:
-                        player.update_action(6)
-                    else:
-                        player.update_action(0)  # 0: idle
-                    player.move(self.gravity)
-
-                self.handle_controls(player)
-
-            # draws cursor
-            # Scale mouse position from display coordinates to virtual coordinates
+            # Scale mouse position for UI
             mouse_x, mouse_y = pygame.mouse.get_pos()
             virtual_mouse_x = int(mouse_x * (self.VIRTUAL_WIDTH / self.display_width))
             virtual_mouse_y = int(mouse_y * (self.VIRTUAL_HEIGHT / self.display_height))
+            virtual_mouse_pos = (virtual_mouse_x, virtual_mouse_y)
+
+            events = pygame.event.get()
+            for event in events:
+                if event.type == pygame.QUIT:
+                    self.run = False
+
+            if self.state == GameState.MENU:
+                self.screen.fill((0, 0, 0))
+                self.main_menu.update(virtual_mouse_pos, events)
+                self.main_menu.draw(self.screen)
+            
+            elif self.state == GameState.MULTIPLAYER_MENU:
+                self.screen.fill((0, 0, 0))
+                self.multiplayer_menu.update(virtual_mouse_pos, events)
+                self.multiplayer_menu.draw(self.screen)
+
+            elif self.state == GameState.GAME:
+                # Update animation time for backgrounds
+                if self.map:
+                    self.map.animation_time += dt / 1000.0  # Convert to seconds
+                self.draw_bg()
+
+                for mob in self.mobs:
+                    mob.update(self.camera_x, self.camera_y)
+                    mob.draw(self.camera_x, self.camera_y)
+                for player in self.players:
+                    # Update camera to follow player (before updating player so health bar uses correct camera)
+                    self.update_camera(player)
+                    player.update(self.camera_x, self.camera_y)
+                    player.draw(self.camera_x, self.camera_y)
+                    player.projectiles_group.update(self.mobs, player)
+                    # Draw projectiles with camera offset
+                    for projectile in player.projectiles_group:
+                        screen_x = projectile.rect.x - self.camera_x
+                        screen_y = projectile.rect.y - self.camera_y
+                        self.screen.blit(projectile.image, (screen_x, screen_y))
+                    player.skills_group.update(player)
+                    # Draw skills with camera offset
+                    for skill in player.skills_group:
+                        screen_x = skill.rect.x - self.camera_x
+                        screen_y = skill.rect.y - self.camera_y
+                        self.screen.blit(skill.image, (screen_x, screen_y))
+
+                    # update player actions
+                    if player.alive:
+                        if player.attack:
+                            player.update_action(player.next_attack)
+                        elif player.in_air:
+                            player.update_action(2)  # 2: jump
+                        elif player.moving_left or player.moving_right:
+                            player.update_action(1)  # 1: run
+                        elif player.skill_big_star:
+                            player.update_action(6)
+                        else:
+                            player.update_action(0)  # 0: idle
+                        player.move(self.gravity)
+
+                    self.handle_controls(player, events)
+
+            # draws cursor
+            # Scale mouse position from display coordinates to virtual coordinates
+            # mouse_x, mouse_y = pygame.mouse.get_pos() # Already got this above
+            # virtual_mouse_x = int(mouse_x * (self.VIRTUAL_WIDTH / self.display_width))
+            # virtual_mouse_y = int(mouse_y * (self.VIRTUAL_HEIGHT / self.display_height))
+            self.screen.blit(self.cursor, (virtual_mouse_x, virtual_mouse_y))
             self.screen.blit(self.cursor, (virtual_mouse_x, virtual_mouse_y))
 
             # Scale virtual screen to display size and blit
@@ -158,9 +215,9 @@ class Game:
 
         pygame.quit()
 
-    def handle_controls(self, player):
+    def handle_controls(self, player, events):
         """ Handles game controlls """
-        for event in pygame.event.get():
+        for event in events:
             # quit game
             if event.type == pygame.QUIT:
                 self.run = False
