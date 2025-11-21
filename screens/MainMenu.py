@@ -2,11 +2,12 @@ import pygame
 from UI.UIElements import Button, Label
 
 class MainMenu:
-    def __init__(self, screen_width, screen_height, on_singleplayer, on_multiplayer, on_quit):
+    def __init__(self, screen_width, screen_height, on_singleplayer, on_multiplayer, on_settings, on_quit):
         self.width = screen_width
         self.height = screen_height
         self.on_singleplayer = on_singleplayer
         self.on_multiplayer = on_multiplayer
+        self.on_settings = on_settings
         self.on_quit = on_quit
         
         self.font = pygame.font.SysFont("Arial", 30, bold=True)
@@ -25,7 +26,8 @@ class MainMenu:
         
         self.buttons.append(Button(center_x, start_y, btn_width, btn_height, "Singleplayer", self.font, action=self.on_singleplayer))
         self.buttons.append(Button(center_x, start_y + btn_height + spacing, btn_width, btn_height, "Multiplayer", self.font, action=self.on_multiplayer))
-        self.buttons.append(Button(center_x, start_y + (btn_height + spacing) * 2, btn_width, btn_height, "Quit Game", self.font, action=self.on_quit))
+        self.buttons.append(Button(center_x, start_y + (btn_height + spacing) * 2, btn_width, btn_height, "Settings", self.font, action=self.on_settings))
+        self.buttons.append(Button(center_x, start_y + (btn_height + spacing) * 3, btn_width, btn_height, "Quit Game", self.font, action=self.on_quit))
 
     def update(self, virtual_mouse_pos, events):
         for btn in self.buttons:
