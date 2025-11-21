@@ -28,6 +28,7 @@ class Game:
         self.player_id = str(uuid.uuid4())
         self.username = ""
         self.network = None
+        self.is_host = True
         self.mobs = pygame.sprite.Group()
         self.gravity = 0.75
         self.fps = fps
@@ -113,6 +114,7 @@ class Game:
     def connect_multiplayer(self, username, ip):
         print(f"Connecting to {ip} as {username}")
         self.username = username
+        self.is_host = False # Assume client until server says otherwise
         self.network = Network(ip)
         self.state = GameState.GAME
         
@@ -222,9 +224,20 @@ class Game:
                     self.map.animation_time += dt / 1000.0  # Convert to seconds
                 self.draw_bg()
 
-                for mob in self.mobs:
-                    mob.update(self.camera_x, self.camera_y)
-                    mob.draw(self.camera_x, self.camera_y)
+                # Mob Logic
+                # Only Host updates mob physics/AI
+                if self.is_host:
+                    for mob in self.mobs:
+                        mob.update(self.camera_x, self.camera_y)
+                        mob.draw(self.camera_x, self.camera_y)
+                else:
+                    # Clients just draw mobs based on server data (updated in network block)
+                    # But we still need to draw them
+                    for mob in self.mobs:
+                        # mob.update() # Don't run update logic on client
+                        mob.client_update(self.camera_x, self.camera_y)
+                        mob.draw(self.camera_x, self.camera_y)
+
                 for player in self.players:
                     # Update camera to follow player (before updating player so health bar uses correct camera)
                     self.update_camera(player)
@@ -261,8 +274,30 @@ class Game:
                     
                     # --- Networking ---
                     if self.network:
-                        # Prepare data to send
-                        data = {
+                        # Prepare player data to send
+                        # Include projectiles
+                        projectiles_data = []
+                        for p in player.projectiles_group:
+                            projectiles_data.append({
+                                'x': p.rect.x,
+                                'y': p.rect.y,
+                                'image_name': p.projectile_name, # We need to know what image to draw
+                                'direction': p.direction,
+                                'angle': p.angle
+                            })
+                            
+                        # Include skills (big star)
+                        skills_data = []
+                        for s in player.skills_group:
+                             skills_data.append({
+                                'x': s.rect.x,
+                                'y': s.rect.y,
+                                'skill_name': s.skill_name,
+                                'direction': s.direction,
+                                'frame_index': s.frame_index # Send frame index for animation
+                            })
+
+                        player_data = {
                             'id': self.player_id,
                             'username': self.username,
                             'x': player.rect.x,
@@ -272,14 +307,41 @@ class Game:
                             'flip': player.flip,
                             'char_type': player.char_type,
                             'hp': player.health,
-                            'max_hp': player.max_health
+                            'max_hp': player.max_health,
+                            'projectiles': projectiles_data,
+                            'skills': skills_data
                         }
                         
+                        # Prepare Mob Data (If Host)
+                        mob_updates = {}
+                        if self.is_host:
+                            for mob in self.mobs:
+                                if mob.alive: # Only send alive mobs? Or send dead state?
+                                    mob_updates[mob.id] = {
+                                        'x': mob.rect.x,
+                                        'y': mob.rect.y,
+                                        'action': mob.action,
+                                        'frame_index': mob.frame_index,
+                                        'flip': mob.flip,
+                                        'hp': mob.health,
+                                        'max_hp': mob.max_health
+                                    }
+                        
                         # Send and receive
-                        all_players_data = self.network.send(data)
+                        packet = {
+                            'player_data': player_data
+                        }
+                        if self.is_host:
+                            packet['mob_updates'] = mob_updates
+                            
+                        server_reply = self.network.send(packet)
                         
                         # Process received data
-                        if all_players_data:
+                        if server_reply:
+                            self.is_host = server_reply.get('is_host', False)
+                            
+                            # 1. Update Remote Players
+                            all_players_data = server_reply.get('players', {})
                             current_remote_ids = set()
                             
                             for addr, p_data in all_players_data.items():
@@ -301,8 +363,12 @@ class Game:
                                     remote_p.frame_index = p_data['frame_index']
                                     remote_p.flip = p_data['flip']
                                     remote_p.health = p_data['hp']
-                                    # Update animation manually since we don't call update()
+                                    # Update animation manually
                                     remote_p.image = remote_p.animation_list[remote_p.action][remote_p.frame_index]
+                                    
+                                    # Store projectile/skill data for drawing
+                                    remote_p.remote_projectiles = p_data.get('projectiles', [])
+                                    remote_p.remote_skills = p_data.get('skills', [])
                                     
                                 else:
                                     # Create new remote player
@@ -312,11 +378,13 @@ class Game:
                                         p_data['x'],
                                         p_data['y'],
                                         1, # scale
-                                        3, # speed (irrelevant)
+                                        3, # speed
                                         p_data['max_hp'],
                                         None, # mobs
                                         None, # tiles
                                     )
+                                    new_p.remote_projectiles = []
+                                    new_p.remote_skills = []
                                     self.remote_players[pid] = new_p
                                     
                             # Remove disconnected players
@@ -324,13 +392,10 @@ class Game:
                             for pid in disconnected_ids:
                                 del self.remote_players[pid]
                                 
-                            # Draw remote players
+                            # Draw remote players and their skills
                             for pid, remote_p in self.remote_players.items():
                                 remote_p.draw(self.camera_x, self.camera_y)
                                 # Draw username
-                                # Find the username from the data (we need to find the data again or store it)
-                                # Optimization: Store username in remote_p or look it up
-                                # Let's just look it up from all_players_data for now, it's inefficient but fine for small player count
                                 p_name = "Unknown"
                                 for p_data in all_players_data.values():
                                     if p_data and p_data.get('id') == pid:
@@ -341,6 +406,30 @@ class Game:
                                 name_surf = font.render(p_name, True, (255, 255, 255))
                                 name_rect = name_surf.get_rect(center=(remote_p.rect.centerx - self.camera_x, remote_p.rect.top - 10 - self.camera_y))
                                 self.screen.blit(name_surf, name_rect)
+                                
+                                # Draw remote projectiles
+                                # We need to load projectile images. 
+                                # Optimization: Load them once or use Player's existing logic if possible.
+                                # Since we don't have the objects, we just draw the images at the positions.
+                                # We can use the local player's projectile loading logic or just load them here.
+                                # Better: Add a method in Player to draw_remote_projectiles
+                                remote_p.draw_remote_projectiles(self.screen, self.camera_x, self.camera_y)
+
+                            # 2. Update Mobs (If Client)
+                            if not self.is_host:
+                                mob_states = server_reply.get('mobs', {})
+                                for mob in self.mobs:
+                                    if mob.id in mob_states:
+                                        m_data = mob_states[mob.id]
+                                        mob.rect.x = m_data['x']
+                                        mob.rect.y = m_data['y']
+                                        mob.action = m_data['action']
+                                        mob.frame_index = m_data['frame_index']
+                                        mob.flip = m_data['flip']
+                                        mob.health = m_data['hp']
+                                        # Update image
+                                        if mob.action < len(mob.animation_list) and mob.frame_index < len(mob.animation_list[mob.action]):
+                                            mob.image = mob.animation_list[mob.action][mob.frame_index]
 
             # draws cursor
             # Scale mouse position from display coordinates to virtual coordinates

@@ -1,22 +1,26 @@
+
 import pygame
 
 class Projectile(pygame.sprite.Sprite):
-    def __init__(self, x, y, direction, range, isRotate, projectile, damage, hit_count):
+    def __init__(self, x, y, direction, speed, isRotate, projectile_name, damage, hit_count):
         pygame.sprite.Sprite.__init__(self)
         if direction == 1:
             self.flip = True
         else:
             self.flip = False
-        self.original_image = pygame.image.load(f'sprites/projectiles/{projectile}/0.png').convert_alpha()
+        self.projectile_name = projectile_name
+        self.original_image = pygame.image.load(f'sprites/projectiles/{self.projectile_name}/0.png').convert_alpha()
         self.image = self.original_image  # This will reference our rotated image.
         self.image = pygame.transform.flip(self.image, self.flip, False)
         self.rect = self.image.get_rect()
         self.rect.center = (x,y)
         if isRotate:
             self.angle = 0
-        self.range = range
-        self.projectile = projectile
-        self.speed = 12
+        if isRotate:
+            self.angle = 0
+        self.range = 300 # Default range if not passed
+        # self.projectile = projectile # Removed as it was undefined and unused
+        self.speed = speed
         self.hit_count = 0
         self.damage = damage
         self.isRotate = isRotate

@@ -5,6 +5,7 @@ class Skill(pygame.sprite.Sprite):
     def __init__(self, x, y, direction, skill):
         pygame.sprite.Sprite.__init__(self)
         self.skill = skill
+        self.skill_name = skill
         self.frame_index = 0
         self.x = x
         self.animation_list = []

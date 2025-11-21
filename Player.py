@@ -472,3 +472,69 @@ class Player(pygame.sprite.Sprite):
  
 
 
+    def draw_remote_projectiles(self, screen, camera_x, camera_y):
+        # Draw projectiles
+        if hasattr(self, 'remote_projectiles'):
+            if not hasattr(self, 'projectile_cache'):
+                self.projectile_cache = {}
+                
+            for p_data in self.remote_projectiles:
+                p_name = p_data['image_name']
+                
+                # Load image if not cached
+                if p_name not in self.projectile_cache:
+                    try:
+                        # Projectiles are stored in sprites/projectiles/{name}/0.png
+                        img = pygame.image.load(f'sprites/projectiles/{p_name}/0.png').convert_alpha()
+                        self.projectile_cache[p_name] = img
+                    except Exception as e:
+                        print(f"Error loading projectile {p_name}: {e}")
+                        continue
+                
+                img = self.projectile_cache[p_name]
+                
+                # Rotate if needed
+                if p_data.get('angle', 0) != 0:
+                    img = pygame.transform.rotate(img, p_data['angle'])
+                elif p_data.get('direction', 1) == -1:
+                    img = pygame.transform.flip(img, True, False)
+                    
+                screen_x = p_data['x'] - camera_x
+                screen_y = p_data['y'] - camera_y
+                screen.blit(img, (screen_x, screen_y))
+
+        # Draw skills
+        if hasattr(self, 'remote_skills'):
+            if not hasattr(self, 'skill_cache'):
+                self.skill_cache = {} # format: {skill_name: [img0, img1, ...]}
+                
+            for s_data in self.remote_skills:
+                s_name = s_data['skill_name']
+                frame_idx = s_data.get('frame_index', 0)
+                
+                # Load animation frames if not cached
+                if s_name not in self.skill_cache:
+                    try:
+                        self.skill_cache[s_name] = []
+                        path = f'sprites/skills/{s_name}'
+                        if os.path.exists(path):
+                            num_frames = len([f for f in os.listdir(path) if f.endswith('.png')])
+                            for i in range(num_frames):
+                                img = pygame.image.load(f'{path}/{i}.png').convert_alpha()
+                                self.skill_cache[s_name].append(img)
+                    except Exception as e:
+                        print(f"Error loading skill {s_name}: {e}")
+                        continue
+                
+                # Draw current frame
+                if s_name in self.skill_cache and self.skill_cache[s_name]:
+                    frames = self.skill_cache[s_name]
+                    # Wrap index if out of bounds (just in case)
+                    img = frames[frame_idx % len(frames)]
+                    
+                    if s_data.get('direction', 1) == 1:
+                        img = pygame.transform.flip(img, True, False)
+                        
+                    screen_x = s_data['x'] - camera_x
+                    screen_y = s_data['y'] - camera_y
+                    screen.blit(img, (screen_x, screen_y))
