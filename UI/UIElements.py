@@ -61,10 +61,10 @@ class Button(UIElement):
         screen.blit(text_surf, text_rect)
 
 class TextInput(UIElement):
-    def __init__(self, x, y, width, height, font, placeholder="", text_color=(0, 0, 0), bg_color=(255, 255, 255)):
+    def __init__(self, x, y, width, height, font, placeholder="", text="", text_color=(0, 0, 0), bg_color=(255, 255, 255)):
         super().__init__(x, y, width, height)
         self.font = font
-        self.text = ""
+        self.text = text
         self.placeholder = placeholder
         self.text_color = text_color
         self.bg_color = bg_color

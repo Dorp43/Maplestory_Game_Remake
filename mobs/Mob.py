@@ -153,6 +153,8 @@ class Mob(pygame.sprite.Sprite):
 
 
     def follow_player(self, player):
+        if not player:
+            return
         self.attack()
         self.randomMovement = False
         #If player in the right
@@ -486,9 +488,10 @@ class Mob(pygame.sprite.Sprite):
 
 
     def hit(self, damage, player):
-        self.has_attacker = True
         self.health -= damage
-        self.attacker = player
+        if player:
+            self.has_attacker = True
+            self.attacker = player
         self.play_sound("mob","hit")
         self.update_action(3)
 

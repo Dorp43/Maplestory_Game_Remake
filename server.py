@@ -58,8 +58,12 @@ def threaded_client(conn, addr):
                         mob_states[mid] = mdata
                         
                 # Handle Mob Hits (From Clients)
-                if 'mob_hits' in data:
-                    pass 
+                # We need to store these and send them to the Host
+                # Let's use a global list for pending hits to host
+                if 'mob_hits' in data and data['mob_hits']:
+                    if not hasattr(threaded_client, 'pending_hits'):
+                        threaded_client.pending_hits = []
+                    threaded_client.pending_hits.extend(data['mob_hits'])
                 
                 # Prepare reply
                 reply = {
@@ -67,6 +71,14 @@ def threaded_client(conn, addr):
                     'mobs': mob_states,
                     'is_host': (addr == host_addr)
                 }
+                
+                # If this is the Host, send them the pending hits and clear the list
+                if addr == host_addr:
+                    if hasattr(threaded_client, 'pending_hits') and threaded_client.pending_hits:
+                        reply['remote_hits'] = threaded_client.pending_hits
+                        threaded_client.pending_hits = [] # Clear after sending
+            
+            conn.sendall(pickle.dumps(reply))
             
             conn.sendall(pickle.dumps(reply))
         except Exception as e:

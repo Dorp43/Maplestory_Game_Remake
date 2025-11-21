@@ -29,7 +29,7 @@ class Projectile(pygame.sprite.Sprite):
 
         
 
-    def update(self, mobs, player):
+    def update(self, mobs, player, hit_list=None):
         #move projectile
         self.rect.x += (self.direction * self.speed)
         if self.isRotate:
@@ -39,6 +39,8 @@ class Projectile(pygame.sprite.Sprite):
                 if mob.alive and mob not in self.mobs_hitted and len(self.mobs_hitted) != self.hit_count:
                     self.mobs_hitted.add(mob)
                     mob.hit(25, player)
+                    if hit_list is not None:
+                        hit_list.append((mob.id, 25))
                     if self.hit_count == 1:
                         self.kill()
         #check if projectile has gone off range

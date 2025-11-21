@@ -2,11 +2,13 @@ import pygame
 from UI.UIElements import Button, TextInput, Label
 
 class MultiplayerMenu:
-    def __init__(self, screen_width, screen_height, on_connect, on_back):
+    def __init__(self, screen_width, screen_height, on_connect, on_back, default_username="", default_ip=""):
         self.width = screen_width
         self.height = screen_height
         self.on_connect = on_connect
         self.on_back = on_back
+        self.default_username = default_username
+        self.default_ip = default_ip
         
         self.font = pygame.font.SysFont("Arial", 24)
         self.title_font = pygame.font.SysFont("Arial", 40, bold=True)
@@ -23,11 +25,11 @@ class MultiplayerMenu:
         
         # Labels and Inputs
         self.ui_elements.append(Label(center_x - 150, start_y, "Username:", self.font))
-        self.username_input = TextInput(center_x - 150, start_y + 30, 300, 40, self.font, placeholder="Enter Username")
+        self.username_input = TextInput(center_x - 150, start_y + 30, 300, 40, self.font, placeholder="Enter Username", text=self.default_username)
         self.ui_elements.append(self.username_input)
         
         self.ui_elements.append(Label(center_x - 150, start_y + 90, "Server IP:", self.font))
-        self.ip_input = TextInput(center_x - 150, start_y + 120, 300, 40, self.font, placeholder="Enter Server IP")
+        self.ip_input = TextInput(center_x - 150, start_y + 120, 300, 40, self.font, placeholder="Enter Server IP", text=self.default_ip)
         self.ui_elements.append(self.ip_input)
         
         # Buttons

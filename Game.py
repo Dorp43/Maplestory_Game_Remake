@@ -16,6 +16,8 @@ class GameState(Enum):
     GAME = 2
 
 
+from utils.SettingsManager import SettingsManager
+
 class Game:
     def __init__(self, width=0, height=0, fps=60, map_id=1):
         pygame.init()
@@ -33,25 +35,37 @@ class Game:
         self.gravity = 0.75
         self.fps = fps
         
+        # Initialize Settings
+        self.settings_manager = SettingsManager()
+        
         # Virtual resolution settings
         self.VIRTUAL_WIDTH = 1366
         self.VIRTUAL_HEIGHT = 768
         
         # Display resolution (actual window size)
-        self.display_width = width
-        self.display_height = height
+        # Load from settings if not provided
+        if width == 0 and height == 0:
+            self.display_width = self.settings_manager.get_setting("window_width", 1024)
+            self.display_height = self.settings_manager.get_setting("window_height", 576)
+        else:
+            self.display_width = width
+            self.display_height = height
         
         # Camera offset (world position of top-left corner of screen)
         self.camera_x = 0
         self.camera_y = 0
         self.initialize_game()
-        self.initialize_game()
         
         # Initialize Menus
+        # Pass saved username/ip to MultiplayerMenu
+        saved_username = self.settings_manager.get_setting("username", "")
+        saved_ip = self.settings_manager.get_setting("last_ip", "127.0.0.1")
+        
         self.main_menu = MainMenu(self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT, 
                                   self.start_singleplayer, self.open_multiplayer, self.open_settings, self.quit_game)
         self.multiplayer_menu = MultiplayerMenu(self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT, 
-                                                self.connect_multiplayer, self.back_to_main)
+                                                self.connect_multiplayer, self.back_to_main, 
+                                                default_username=saved_username, default_ip=saved_ip)
         self.settings_menu = SettingsMenu(self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT,
                                           self.back_to_main, self.toggle_fullscreen, self.toggle_audio)
         
@@ -70,14 +84,21 @@ class Game:
     def toggle_fullscreen(self):
         is_fullscreen = self.display_surface.get_flags() & pygame.FULLSCREEN
         if is_fullscreen:
-            self.display_surface = pygame.display.set_mode((self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT))
-            self.display_width = self.VIRTUAL_WIDTH
-            self.display_height = self.VIRTUAL_HEIGHT
+            # Switch to Windowed
+            # Use saved window size or default
+            w = self.settings_manager.get_setting("window_width", 1024)
+            h = self.settings_manager.get_setting("window_height", 576)
+            self.display_surface = pygame.display.set_mode((w, h))
+            self.display_width = w
+            self.display_height = h
+            self.settings_manager.set_setting("fullscreen", False)
         else:
+            # Switch to Fullscreen
             display_info = pygame.display.Info()
             self.display_width = display_info.current_w
             self.display_height = display_info.current_h
             self.display_surface = pygame.display.set_mode((self.display_width, self.display_height), pygame.FULLSCREEN)
+            self.settings_manager.set_setting("fullscreen", True)
             
     def toggle_audio(self):
         if pygame.mixer.get_init():
@@ -115,6 +136,11 @@ class Game:
         print(f"Connecting to {ip} as {username}")
         self.username = username
         self.is_host = False # Assume client until server says otherwise
+        
+        # Save settings
+        self.settings_manager.set_setting("username", username)
+        self.settings_manager.set_setting("last_ip", ip)
+        
         self.network = Network(ip)
         self.state = GameState.GAME
         
@@ -123,15 +149,20 @@ class Game:
 
     def initialize_game(self):
         """ Initializes general settings """
-        display_info = pygame.display.Info()
-        # If width/height were not provided, use current display resolution.
-        if self.display_width <= 0 or self.display_height <= 0:
+        # Check fullscreen setting
+        start_fullscreen = self.settings_manager.get_setting("fullscreen", False)
+        
+        if start_fullscreen:
+            display_info = pygame.display.Info()
             self.display_width = display_info.current_w
             self.display_height = display_info.current_h
+            flags = pygame.FULLSCREEN
+        else:
+            flags = 0
 
         # Create the actual display window
         self.display_surface = pygame.display.set_mode(
-            (self.display_width, self.display_height), pygame.FULLSCREEN)
+            (self.display_width, self.display_height), flags)
             
         # Create the virtual screen surface (what we draw to)
         self.screen = pygame.Surface((self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT)).convert()
@@ -243,7 +274,11 @@ class Game:
                     self.update_camera(player)
                     player.update(self.camera_x, self.camera_y)
                     player.draw(self.camera_x, self.camera_y)
-                    player.projectiles_group.update(self.mobs, player)
+                    
+                    # Collect hits this frame
+                    self.frame_hits = []
+                    player.projectiles_group.update(self.mobs, player, self.frame_hits)
+                    
                     # Draw projectiles with camera offset
                     for projectile in player.projectiles_group:
                         screen_x = projectile.rect.x - self.camera_x
@@ -329,7 +364,8 @@ class Game:
                         
                         # Send and receive
                         packet = {
-                            'player_data': player_data
+                            'player_data': player_data,
+                            'mob_hits': self.frame_hits # Send hits to server
                         }
                         if self.is_host:
                             packet['mob_updates'] = mob_updates
@@ -339,6 +375,15 @@ class Game:
                         # Process received data
                         if server_reply:
                             self.is_host = server_reply.get('is_host', False)
+                            
+                            # If Host, process remote hits
+                            if self.is_host and 'remote_hits' in server_reply:
+                                for mob_id, damage in server_reply['remote_hits']:
+                                    # Find mob by ID
+                                    for mob in self.mobs:
+                                        if mob.id == mob_id and mob.alive:
+                                            mob.hit(damage, None) # Apply damage
+                                            break
                             
                             # 1. Update Remote Players
                             all_players_data = server_reply.get('players', {})
