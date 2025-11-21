@@ -1,0 +1,56 @@
+{
+  "layers": [
+    {
+      "background_id": 2,
+      "y": 88,
+      "layer_index": 0,
+      "scroll_speed": 1.0,
+      "repeat": true,
+      "x": 0,
+      "animated": true,
+      "animation_speed": 20.0
+    },
+    {
+      "background_id": 3,
+      "y": 521,
+      "layer_index": 0,
+      "scroll_speed": 1.0,
+      "repeat": true,
+      "x": 0,
+      "animated": false,
+      "animation_speed": 20.0
+    },
+    {
+      "background_id": 4,
+      "y": 202,
+      "layer_index": 0,
+      "scroll_speed": 1.0,
+      "repeat": false,
+      "x": 1161,
+      "animated": false,
+      "animation_speed": 20.0
+    },
+    {
+      "background_id": 7,
+      "y": 579,
+      "layer_index": 0,
+      "scroll_speed": 1.0,
+      "repeat": false,
+      "x": 0,
+      "animated": false,
+      "animation_speed": 20.0
+    },
+    {
+      "background_id": 5,
+      "y": 626,
+      "layer_index": 0,
+      "scroll_speed": 1.0,
+      "repeat": false,
+      "x": 1225,
+      "animated": false,
+      "animation_speed": 20.0
+    }
+  ],
+  "global_start_y": 128,
+  "global_end_y": 927
+}

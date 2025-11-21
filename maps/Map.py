@@ -18,6 +18,7 @@ class Map:
         self.tile_grid = []
         self.slope_tiles = []
         self.lines = []
+        self.animation_time = 0.0  # Track time for background animations
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.project_root = os.path.dirname(base_dir)
@@ -28,6 +29,13 @@ class Map:
             if data.get("solid", True) and tile_id != 0
         }
         self.tile_images = self.load_tile_images()
+        self.background_manifest_path = os.path.join(base_dir, "background_manifest.json")
+        self.background_defs = self.load_background_manifest()
+        self.background_images = self.load_background_images()
+        self.background_layers = []
+        self.global_bg_start_y = None  # Global top boundary for all backgrounds
+        self.global_bg_end_y = None  # Global bottom boundary for all backgrounds
+        self.spawn_point = {"x": 400, "y": 200}  # Default spawn
         self.set_map(map_id)
 
     def set_map(self, map_id):
@@ -36,6 +44,10 @@ class Map:
         # load collision / platform tiles for this map from CSV
         self.load_tiles_from_csv(map_id)
         self.load_lines_from_json(map_id)
+        # load background layers
+        self.load_backgrounds_from_json(map_id)
+        # load spawn point
+        self.load_spawn_from_json(map_id)
 
         mobs_from_csv = self.load_mobs_from_csv(map_id)
         if mobs_from_csv:
@@ -288,7 +300,11 @@ class Map:
         return 0, self.screen.get_width(), 0, self.screen.get_height()
 
     def draw(self, surface, camera_x=0, camera_y=0):
-        """Render the tile grid onto the provided surface with camera offset."""
+        """Render backgrounds first, then the tile grid onto the provided surface with camera offset."""
+        # Draw background layers (back to front, sorted by layer index)
+        self.draw_backgrounds(surface, camera_x, camera_y)
+        
+        # Draw tiles
         if not self.tile_grid:
             return
         for y, row in enumerate(self.tile_grid):
@@ -377,3 +393,181 @@ class Map:
                 self.lines = json.load(f)
         except Exception as e:
             print(f"[Map] Error loading lines: {e}")
+
+    def load_background_manifest(self):
+        """Load background definitions (id -> path)."""
+        bg_defs = {
+            0: {"id": 0, "label": "Empty", "path": None}
+        }
+        if os.path.exists(self.background_manifest_path):
+            with open(self.background_manifest_path) as f:
+                data = json.load(f)
+                for entry in data.get("backgrounds", []):
+                    bg_defs[entry["id"]] = entry
+        else:
+            print("[Map] WARNING: background_manifest.json missing; using default empty backgrounds only.")
+        return bg_defs
+
+    def load_background_images(self):
+        """Load pygame surfaces for every background that has a sprite path."""
+        cache = {}
+        backgrounds_root = os.path.join(self.project_root, "sprites", "maps", "back")
+        for bg_id, entry in self.background_defs.items():
+            path = entry.get("path")
+            if bg_id == 0 or not path:
+                continue
+            sprite_path = os.path.join(backgrounds_root, path)
+            if not os.path.exists(sprite_path):
+                print(f"[Map] WARNING: missing background sprite for id {bg_id}: {sprite_path}")
+                continue
+            try:
+                img = pygame.image.load(sprite_path).convert_alpha()
+                # Scale background by 2x as requested
+                new_width = int(img.get_width() * 1.2)
+                new_height = int(img.get_height() * 1.2)
+                img = pygame.transform.scale(img, (new_width, new_height))
+                cache[bg_id] = img
+            except pygame.error as e:
+                print(f"[Map] Error loading background {bg_id}: {e}")
+        return cache
+
+    def load_backgrounds_from_json(self, map_id: int):
+        """Load background layers from map{id}_backgrounds.json."""
+        self.background_layers = []
+        json_path = os.path.join(
+            os.path.dirname(__file__),
+            f"map{map_id}_backgrounds.json"
+        )
+        
+        if not os.path.exists(json_path):
+            return
+
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+                layers = data.get("layers", [])
+                # Set defaults for backward compatibility
+                for layer in layers:
+                    if "repeat" not in layer:
+                        layer["repeat"] = False
+                    if "x" not in layer and not layer.get("repeat", False):
+                        layer["x"] = 0  # Default X for non-repeating
+                    if "animated" not in layer:
+                        layer["animated"] = False
+                    if "animation_speed" not in layer:
+                        layer["animation_speed"] = 20.0
+                self.background_layers = layers
+                # Load global bounds
+                self.global_bg_start_y = data.get("global_start_y", None)
+                self.global_bg_end_y = data.get("global_end_y", None)
+                # Sort layers by layer_index (lower = drawn first/behind)
+                self.background_layers.sort(key=lambda l: l.get("layer_index", 0))
+        except Exception as e:
+            print(f"[Map] Error loading backgrounds: {e}")
+
+    def draw_backgrounds(self, surface, camera_x=0, camera_y=0):
+        """Draw all background layers with optional horizontal repeating."""
+        screen_width = surface.get_width()
+        screen_height = surface.get_height()
+        
+        for layer in self.background_layers:
+            bg_id = layer.get("background_id", 0)
+            if bg_id == 0:
+                continue
+                
+            bg_img = self.background_images.get(bg_id)
+            if not bg_img:
+                continue
+            
+            # Get layer properties
+            y_pos = layer.get("y", 0)
+            scroll_speed = layer.get("scroll_speed", 1.0)  # Parallax effect (1.0 = normal, <1.0 = slower)
+            repeat = layer.get("repeat", False)  # Default to False (non-repeating)
+            animated = layer.get("animated", False)
+            animation_speed = layer.get("animation_speed", 20.0)
+            
+            # Calculate scroll offset with parallax
+            scroll_x = int(camera_x * scroll_speed)
+            img_width = bg_img.get_width()
+            img_height = bg_img.get_height()
+            
+            # Normal drawing (no scaling)
+            screen_y = y_pos - camera_y
+            
+            # Clip background vertically if global bounds are set
+            clip_top = 0
+            clip_bottom = img_height
+            
+            if self.global_bg_start_y is not None:
+                # Clip top if background starts above the boundary
+                if y_pos < self.global_bg_start_y:
+                    clip_top = self.global_bg_start_y - y_pos
+            
+            if self.global_bg_end_y is not None:
+                # Clip bottom if background extends below the boundary
+                if y_pos + img_height > self.global_bg_end_y:
+                    clip_bottom = self.global_bg_end_y - y_pos
+            
+            # Only draw if layer is visible on screen vertically and within bounds
+            # Also check if the clipped portion is valid (clip_bottom > clip_top)
+            if screen_y + clip_bottom >= 0 and screen_y + clip_top < screen_height and clip_bottom > clip_top:
+                if repeat:
+                    # Draw repeating background - cover entire horizontal space
+                    # Calculate animation offset (moves right to left, so negative)
+                    anim_offset = 0
+                    if animated:
+                        anim_offset = int(self.animation_time * animation_speed) % img_width
+                    
+                    # Calculate how many times to repeat horizontally
+                    # Start from leftmost visible position
+                    start_x = (-scroll_x - anim_offset) % img_width - img_width
+                    # Extend well beyond screen to ensure full coverage
+                    end_x = screen_width + img_width * 2
+                    
+                    # Draw repeating background with vertical clipping
+                    for x in range(start_x, end_x, img_width):
+                        if clip_top > 0 or clip_bottom < img_height:
+                            # Create a clipped surface
+                            visible_height = clip_bottom - clip_top
+                            if visible_height > 0:
+                                clipped_surf = pygame.Surface((img_width, visible_height), pygame.SRCALPHA)
+                                clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, visible_height))
+                                surface.blit(clipped_surf, (x, screen_y + clip_top))
+                        else:
+                            surface.blit(bg_img, (x, screen_y))
+                else:
+                    # Draw single instance (no repeating) with vertical clipping
+                    x_pos = layer.get("x", 0)  # X position for non-repeating backgrounds
+                    screen_x = x_pos - scroll_x
+                    # Only draw if visible on screen
+                    if screen_x + img_width >= 0 and screen_x < screen_width:
+                        if clip_top > 0 or clip_bottom < img_height:
+                            # Create a clipped surface
+                            visible_height = clip_bottom - clip_top
+                            if visible_height > 0:
+                                clipped_surf = pygame.Surface((img_width, visible_height), pygame.SRCALPHA)
+                                clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, visible_height))
+                                surface.blit(clipped_surf, (screen_x, screen_y + clip_top))
+                        else:
+                            surface.blit(bg_img, (screen_x, screen_y))
+
+    def load_spawn_from_json(self, map_id: int):
+        """Load spawn point from map{id}_spawn.json."""
+        json_path = os.path.join(
+            os.path.dirname(__file__),
+            f"map{map_id}_spawn.json"
+        )
+        
+        if not os.path.exists(json_path):
+            return
+
+        try:
+            with open(json_path, "r") as f:
+                data = json.load(f)
+                self.spawn_point = {"x": data.get("x", 400), "y": data.get("y", 200)}
+        except Exception as e:
+            print(f"[Map] Error loading spawn point: {e}")
+
+    def get_spawn_point(self):
+        """Get the spawn point coordinates. Returns (x, y) tuple."""
+        return self.spawn_point.get("x", 400), self.spawn_point.get("y", 200)

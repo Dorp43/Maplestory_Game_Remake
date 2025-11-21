@@ -54,6 +54,7 @@ class Player(pygame.sprite.Sprite):
         self.update_time = pygame.time.get_ticks()
         
         #load all images for the players
+        print(f"DEBUG: os.listdir is {os.listdir}")
         animation_types = ['stand', 'walk', 'jump', 'attack1', 'attack2', 'attack3', 'attack_big_star', 'hit', 'stab']
         for animation in animation_types:
             #reset temporary list of images
@@ -61,7 +62,7 @@ class Player(pygame.sprite.Sprite):
             #count number of files in the folder
             num_of_frames = len(os.listdir(f'sprites/{self.char_type}/Thief/{animation}'))
             for i in range(num_of_frames):
-                img = pygame.image.load(f'sprites/{self.char_type}/Thief/{animation}/{i}.png')
+                img = pygame.image.load(f'sprites/{self.char_type}/Thief/{animation}/{i}.png').convert_alpha()
                 img = pygame.transform.scale(img, (int(img.get_width() * scale), int(img.get_height() * scale)))
                 temp_list.append(img)
             self.animation_list.append(temp_list)

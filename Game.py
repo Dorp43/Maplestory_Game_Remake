@@ -5,7 +5,7 @@ from maps.Map import Map
 
 
 class Game:
-    def __init__(self, width=0, height=0, fps=60, map_id=0):
+    def __init__(self, width=0, height=0, fps=60, map_id=1):
         pygame.init()
         self.run = True
         self.map_id = map_id
@@ -14,8 +14,15 @@ class Game:
         self.mobs = pygame.sprite.Group()
         self.gravity = 0.75
         self.fps = fps
-        self.screen_width = width
-        self.screen_height = height
+        
+        # Virtual resolution settings
+        self.VIRTUAL_WIDTH = 1366
+        self.VIRTUAL_HEIGHT = 768
+        
+        # Display resolution (actual window size)
+        self.display_width = width
+        self.display_height = height
+        
         # Camera offset (world position of top-left corner of screen)
         self.camera_x = 0
         self.camera_y = 0
@@ -27,12 +34,17 @@ class Game:
         """ Initializes general settings """
         display_info = pygame.display.Info()
         # If width/height were not provided, use current display resolution.
-        if self.screen_width <= 0 or self.screen_height <= 0:
-            self.screen_width = display_info.current_w
-            self.screen_height = display_info.current_h
+        if self.display_width <= 0 or self.display_height <= 0:
+            self.display_width = display_info.current_w
+            self.display_height = display_info.current_h
 
-        self.screen = pygame.display.set_mode(
-            (self.screen_width, self.screen_height), pygame.FULLSCREEN)
+        # Create the actual display window
+        self.display_surface = pygame.display.set_mode(
+            (self.display_width, self.display_height), pygame.FULLSCREEN)
+            
+        # Create the virtual screen surface (what we draw to)
+        self.screen = pygame.Surface((self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT)).convert()
+        
         self.clock = pygame.time.Clock()
         pygame.mouse.set_visible(False)  # hide the cursor
         self.cursor = pygame.image.load(
@@ -44,9 +56,9 @@ class Game:
         if not self.map:
             return
             
-        # Center camera on player
-        target_x = player.rect.centerx - self.screen_width // 2
-        target_y = player.rect.centery - self.screen_height // 2
+        # Center camera on player (using virtual dimensions)
+        target_x = player.rect.centerx - self.VIRTUAL_WIDTH // 2
+        target_y = player.rect.centery - self.VIRTUAL_HEIGHT // 2
         
         # Get map boundaries
         map_min_x, map_max_x, map_min_y, map_max_y = self.map.get_map_bounds()
@@ -54,11 +66,26 @@ class Game:
         # Calculate camera limits (camera position is top-left of screen)
         # Horizontal: clamp both sides (don't show void on left or right)
         camera_min_x = map_min_x
-        camera_max_x = map_max_x - self.screen_width
+        camera_max_x = map_max_x - self.VIRTUAL_WIDTH
         
         # Vertical: only clamp bottom (don't show void below), but allow void above
         # Don't set camera_min_y - allow camera to go above map_min_y to show void at top
-        camera_max_y = map_max_y - self.screen_height
+        camera_max_y = map_max_y - self.VIRTUAL_HEIGHT
+        
+        # If global background bounds are set, clamp camera to them
+        if self.map.global_bg_start_y is not None:
+            # Ensure camera doesn't go above the top background bound
+            camera_min_y = self.map.global_bg_start_y
+        else:
+            # Default behavior: allow going above map top (no min y)
+            camera_min_y = float('-inf')
+            
+        if self.map.global_bg_end_y is not None:
+            # Ensure camera doesn't go below the bottom background bound
+            # The bottom of the screen should not exceed global_bg_end_y
+            # So camera_y + screen_height <= global_bg_end_y
+            # camera_y <= global_bg_end_y - screen_height
+            camera_max_y = min(camera_max_y, self.map.global_bg_end_y - self.VIRTUAL_HEIGHT)
         
         # Handle case where map is smaller than screen horizontally
         if camera_max_x < camera_min_x:
@@ -67,14 +94,16 @@ class Game:
         # Clamp camera horizontally (both sides)
         self.camera_x = max(camera_min_x, min(camera_max_x, target_x))
         
-        # Clamp camera vertically (only bottom, allow going above map top)
-        # Don't clamp to map_min_y - we want to allow showing void above
-        self.camera_y = min(camera_max_y, target_y)
+        # Clamp camera vertically
+        self.camera_y = max(camera_min_y, min(camera_max_y, target_y))
 
     def game_loop(self):
         """ Game loop main method """
         while self.run:
-            self.clock.tick(self.fps)
+            dt = self.clock.tick(self.fps)
+            # Update animation time for backgrounds
+            if self.map:
+                self.map.animation_time += dt / 1000.0  # Convert to seconds
             self.draw_bg()
 
             for mob in self.mobs:
@@ -115,7 +144,15 @@ class Game:
                 self.handle_controls(player)
 
             # draws cursor
-            self.screen.blit(self.cursor, (pygame.mouse.get_pos()))
+            # Scale mouse position from display coordinates to virtual coordinates
+            mouse_x, mouse_y = pygame.mouse.get_pos()
+            virtual_mouse_x = int(mouse_x * (self.VIRTUAL_WIDTH / self.display_width))
+            virtual_mouse_y = int(mouse_y * (self.VIRTUAL_HEIGHT / self.display_height))
+            self.screen.blit(self.cursor, (virtual_mouse_x, virtual_mouse_y))
+
+            # Scale virtual screen to display size and blit
+            scaled_screen = pygame.transform.scale(self.screen, (self.display_width, self.display_height))
+            self.display_surface.blit(scaled_screen, (0, 0))
 
             pygame.display.update()
 
@@ -168,12 +205,14 @@ class Game:
         self.mobs = self.map.get_mobs()
         # Get map boundaries to pass to player
         map_bounds = self.map.get_map_bounds()
+        # Get spawn point from map
+        spawn_x, spawn_y = self.map.get_spawn_point()
         # Spawn Player (Would move to Map class on next update)
         player = Player(
             self.screen,
             'player',
-            400,
-            200,
+            spawn_x,
+            spawn_y,
             1,
             3,
             200,
@@ -185,8 +224,8 @@ class Game:
         )
         self.players.add(player)
         # Initialize camera to player's starting position
-        self.camera_x = player.rect.centerx - self.screen_width // 2
-        self.camera_y = player.rect.centery - self.screen_height // 2
+        self.camera_x = player.rect.centerx - self.VIRTUAL_WIDTH // 2
+        self.camera_y = player.rect.centery - self.VIRTUAL_HEIGHT // 2
 
     def draw_bg(self):
         self.screen.fill((255, 255, 255))
@@ -194,4 +233,5 @@ class Game:
             self.map.draw(self.screen, self.camera_x, self.camera_y)
 
 
-game = Game()
+if __name__ == "__main__":
+    game = Game()

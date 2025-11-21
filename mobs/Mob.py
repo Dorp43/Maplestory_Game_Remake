@@ -73,7 +73,7 @@ class Mob(pygame.sprite.Sprite):
 
             num_of_frames = len(os.listdir(anim_path))
             for i in range(num_of_frames):
-                img = pygame.image.load(f'{anim_path}/{i}.png')
+                img = pygame.image.load(f'{anim_path}/{i}.png').convert_alpha()
                 img = pygame.transform.scale(img, (int(img.get_width() * scale), int(img.get_height() * scale)))
                 temp_list.append(img)
 
