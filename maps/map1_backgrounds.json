@@ -2,27 +2,37 @@
   "layers": [
     {
       "background_id": 2,
-      "y": 176,
+      "y": 88,
       "layer_index": 0,
       "scroll_speed": 1.0,
       "repeat": true,
-      "x": 6,
+      "x": 0,
       "animated": true,
       "animation_speed": 20.0
     },
     {
       "background_id": 3,
-      "y": 617,
+      "y": 521,
       "layer_index": 0,
       "scroll_speed": 1.0,
       "repeat": true,
-      "x": 4,
+      "x": 0,
+      "animated": false,
+      "animation_speed": 20.0
+    },
+    {
+      "background_id": 4,
+      "y": 202,
+      "layer_index": 0,
+      "scroll_speed": 1.0,
+      "repeat": false,
+      "x": 1161,
       "animated": false,
       "animation_speed": 20.0
     },
     {
       "background_id": 7,
-      "y": 666,
+      "y": 579,
       "layer_index": 0,
       "scroll_speed": 1.0,
       "repeat": false,
@@ -32,35 +42,15 @@
     },
     {
       "background_id": 5,
-      "y": 706,
+      "y": 626,
       "layer_index": 0,
       "scroll_speed": 1.0,
       "repeat": false,
-      "x": 1023,
-      "animated": false,
-      "animation_speed": 20.0
-    },
-    {
-      "background_id": 6,
-      "y": 705,
-      "layer_index": 0,
-      "scroll_speed": 1.0,
-      "repeat": false,
-      "x": 2044,
-      "animated": false,
-      "animation_speed": 20.0
-    },
-    {
-      "background_id": 4,
-      "y": 350,
-      "layer_index": 0,
-      "scroll_speed": 1.0,
-      "repeat": false,
-      "x": 969,
+      "x": 1225,
       "animated": false,
       "animation_speed": 20.0
     }
   ],
-  "global_start_y": 175,
+  "global_start_y": 128,
   "global_end_y": 927
 }

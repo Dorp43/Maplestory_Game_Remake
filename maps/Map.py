@@ -422,6 +422,10 @@ class Map:
                 continue
             try:
                 img = pygame.image.load(sprite_path).convert_alpha()
+                # Scale background by 2x as requested
+                new_width = int(img.get_width() * 1.2)
+                new_height = int(img.get_height() * 1.2)
+                img = pygame.transform.scale(img, (new_width, new_height))
                 cache[bg_id] = img
             except pygame.error as e:
                 print(f"[Map] Error loading background {bg_id}: {e}")

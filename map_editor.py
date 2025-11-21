@@ -286,8 +286,13 @@ def load_background_images(base_dir: str, bg_entries):
             continue
         try:
             img = pygame.image.load(full_path).convert_alpha()
-            # Scale preview for palette
-            ow, oh = img.get_size()
+            # Scale background by 1.2x as requested
+            new_width = int(img.get_width() * 1.2)
+            new_height = int(img.get_height() * 1.2)
+            img = pygame.transform.scale(img, (new_width, new_height))
+            
+            # Create preview for palette (keep it small)
+            ow, oh = img.get_size() # Get size of the now scaled image
             if ow > 0 and oh > 0:
                 scale_prev = min(PREVIEW_WIDTH / ow, PREVIEW_HEIGHT / oh)
                 pw = int(ow * scale_prev)
@@ -295,6 +300,7 @@ def load_background_images(base_dir: str, bg_entries):
                 preview_img = pygame.transform.scale(img, (pw, ph))
                 prev_ox = (PREVIEW_WIDTH - pw) // 2
                 prev_oy = (PREVIEW_HEIGHT - ph) // 2
+                
                 cache[bg_id] = {
                     'img': img,
                     'preview_img': preview_img,
@@ -1005,63 +1011,63 @@ def main():
                                 
                                 # If not clicking on boundary line, handle background placement/dragging
                                 if not boundary_clicked:
-                                    if selected_bg_id != 0:
-                                        # Check if clicking on existing background layer to drag it
-                                        closest_idx = None
-                                        closest_dist = 30 ** 2  # 30 pixel threshold for clicking
-                                        for i, layer in enumerate(bg_layers):
-                                            layer_y = layer.get("y", 0)
-                                            layer_x = layer.get("x", 0) if not layer.get("repeat", False) else None
-                                            dy = layer_y - world_y
-                                            dist_y = dy * dy
-                                            
-                                            # For non-repeating, also check X distance
-                                            if layer_x is not None:
-                                                dx = layer_x - world_x
-                                                dist = dx * dx + dist_y
-                                            else:
-                                                # For repeating, only check Y
-                                                dist = dist_y
-                                            
-                                            if dist <= closest_dist:
-                                                closest_dist = dist
-                                                closest_idx = i
+                                    # Check if clicking on existing background layer to drag it
+                                    closest_idx = None
+                                    closest_dist = 30 ** 2  # 30 pixel threshold for clicking
+                                    for i, layer in enumerate(bg_layers):
+                                        layer_y = layer.get("y", 0)
+                                        layer_x = layer.get("x", 0) if not layer.get("repeat", False) else None
+                                        dy = layer_y - world_y
+                                        dist_y = dy * dy
                                         
-                                        if closest_idx is not None:
-                                            # Start dragging existing background
-                                            dragging_background = closest_idx
-                                            drag_bg_start_pos = (world_x, world_y)
-                                            layer = bg_layers[closest_idx]
-                                            drag_bg_start_layer_pos = (layer.get("x", 0), layer.get("y", 0))
+                                        # For non-repeating, also check X distance
+                                        if layer_x is not None:
+                                            dx = layer_x - world_x
+                                            dist = dx * dx + dist_y
                                         else:
-                                            # Check if layer already exists at this Y position (for repeating backgrounds)
-                                            existing_idx = None
-                                            for i, layer in enumerate(bg_layers):
-                                                if layer.get("repeat", False) and abs(layer.get("y", 0) - world_y) < 10:
-                                                    existing_idx = i
-                                                    break
-                                            
-                                            if existing_idx is not None:
-                                                # Update existing layer
-                                                existing_layer = bg_layers[existing_idx]
-                                                bg_layers[existing_idx] = {
-                                                    "background_id": selected_bg_id,
-                                                    "y": world_y,
-                                                    "layer_index": current_layer_index,
-                                                    "scroll_speed": existing_layer.get("scroll_speed", 1.0),
-                                                    "repeat": existing_layer.get("repeat", False),
-                                                    "x": existing_layer.get("x", 0),  # Preserve X for non-repeating
-                                                    "animated": existing_layer.get("animated", False),
-                                                    "animation_speed": existing_layer.get("animation_speed", 20.0)
-                                                }
-                                            else:
-                                                # Add new layer (default: NON-repeating, not animated)
-                                                bg_layers.append({
-                                                    "background_id": selected_bg_id,
-                                                    "y": world_y,
-                                                    "layer_index": current_layer_index,
-                                                    "scroll_speed": 1.0,
-                                                    "repeat": False,  # Default to NON-repeating
+                                            # For repeating, only check Y
+                                            dist = dist_y
+                                        
+                                        if dist <= closest_dist:
+                                            closest_dist = dist
+                                            closest_idx = i
+                                    
+                                    if closest_idx is not None:
+                                        # Start dragging existing background
+                                        dragging_background = closest_idx
+                                        drag_bg_start_pos = (world_x, world_y)
+                                        layer = bg_layers[closest_idx]
+                                        drag_bg_start_layer_pos = (layer.get("x", 0), layer.get("y", 0))
+                                    elif selected_bg_id != 0:
+                                        # Only add/update if we have a valid background selected
+                                        # Check if layer already exists at this Y position (for repeating backgrounds)
+                                        existing_idx = None
+                                        for i, layer in enumerate(bg_layers):
+                                            if layer.get("repeat", False) and abs(layer.get("y", 0) - world_y) < 10:
+                                                existing_idx = i
+                                                break
+                                        
+                                        if existing_idx is not None:
+                                            # Update existing layer
+                                            existing_layer = bg_layers[existing_idx]
+                                            bg_layers[existing_idx] = {
+                                                "background_id": selected_bg_id,
+                                                "y": world_y,
+                                                "layer_index": current_layer_index,
+                                                "scroll_speed": existing_layer.get("scroll_speed", 1.0),
+                                                "repeat": existing_layer.get("repeat", False),
+                                                "x": existing_layer.get("x", 0),  # Preserve X for non-repeating
+                                                "animated": existing_layer.get("animated", False),
+                                                "animation_speed": existing_layer.get("animation_speed", 20.0)
+                                            }
+                                        else:
+                                            # Add new layer (default: NON-repeating, not animated)
+                                            bg_layers.append({
+                                                "background_id": selected_bg_id,
+                                                "y": world_y,
+                                                "layer_index": current_layer_index,
+                                                "scroll_speed": 1.0,
+                                                "repeat": False,  # Default to NON-repeating
                                                 "x": world_x,  # X position for non-repeating backgrounds
                                                 "animated": False,  # Default to not animated
                                                 "animation_speed": 20.0  # Pixels per second (for when animated)
