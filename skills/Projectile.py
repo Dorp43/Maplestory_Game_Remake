@@ -13,11 +13,10 @@ class Projectile(pygame.sprite.Sprite):
         self.image = self.original_image  # This will reference our rotated image.
         self.image = pygame.transform.flip(self.image, self.flip, False)
         self.rect = self.image.get_rect()
+        self.rect = self.image.get_rect()
         self.rect.center = (x,y)
-        if isRotate:
-            self.angle = 0
-        if isRotate:
-            self.angle = 0
+        self.angle = 0 # Always initialize angle
+        
         self.range = 300 # Default range if not passed
         # self.projectile = projectile # Removed as it was undefined and unused
         self.speed = speed
@@ -44,6 +43,7 @@ class Projectile(pygame.sprite.Sprite):
                         self.kill()
         #check if projectile has gone off range
         if self.rect.x > (player.rect.x + self.range) or self.rect.x < (player.rect.x - self.range):
+            # print("DEBUG: Projectile killed due to range")
             self.kill()
 
     def rotate(self):

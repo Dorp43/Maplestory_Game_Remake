@@ -341,7 +341,7 @@ class Player(pygame.sprite.Sprite):
 
 
     def shoot(self, projectile, isRotate, damage, hit_count):
-        projectile_img = Projectile(self.rect.centerx + (0.6 * self.rect.size[0] * self.direction), self.rect.centery, self.direction, 300, isRotate, projectile, damage, hit_count)
+        projectile_img = Projectile(self.rect.centerx + (0.6 * self.rect.size[0] * self.direction), self.rect.centery, self.direction, 15, isRotate, projectile, damage, hit_count)
         self.projectiles_group.add(projectile_img)
         self.play_sound("player", "attack")
 
@@ -416,6 +416,14 @@ class Player(pygame.sprite.Sprite):
                 self.attack = False
                 self.next_attack = random.randint(3, 5) # To get a random attack (1-3)
                 self.action = self.next_attack
+        
+        # Return a default cooldown or the current one?
+        # The caller assigns this to animation_cooldown.
+        # We should probably return a reasonable value, e.g. 150 or keep existing logic.
+        # Looking at update_animation, it sets animation_cooldown based on action.
+        # If we return something here, it overrides it for the NEXT frame wait.
+        # Let's return 150 as a safe default for attack frames.
+        return 150
 
 
             

@@ -395,6 +395,7 @@ class Game:
                             # Draw remote players and their skills
                             for pid, remote_p in self.remote_players.items():
                                 remote_p.draw(self.camera_x, self.camera_y)
+                                remote_p.draw_remote_projectiles(self.screen, self.camera_x, self.camera_y)
                                 # Draw username
                                 p_name = "Unknown"
                                 for p_data in all_players_data.values():
