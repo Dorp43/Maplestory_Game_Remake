@@ -17,7 +17,7 @@ class Skill(pygame.sprite.Sprite):
 
         num_of_frames = len(os.listdir(f'sprites/skills/{skill}'))
         for i in range(num_of_frames):
-                img = pygame.image.load(f'sprites/skills/{skill}/{i}.png')
+                img = pygame.image.load(f'sprites/skills/{skill}/{i}.png').convert_alpha()
                 img = pygame.transform.scale(img, (int(img.get_width()), int(img.get_height())))
                 img = pygame.transform.flip(img, self.flip, False)
                 self.animation_list.append(img)

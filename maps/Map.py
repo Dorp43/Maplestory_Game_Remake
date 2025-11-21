@@ -466,42 +466,6 @@ class Map:
         screen_width = surface.get_width()
         screen_height = surface.get_height()
         
-        # If global bounds are set, calculate scale factor to fit all backgrounds between boundaries
-        has_global_bounds = self.global_bg_start_y is not None and self.global_bg_end_y is not None
-        scale_factor = 1.0
-        min_bg_y = 0
-        
-        if has_global_bounds:
-            bounds_height = self.global_bg_end_y - self.global_bg_start_y
-            if bounds_height > 0 and len(self.background_layers) > 0:
-                # Find the min and max Y positions of all backgrounds to determine their total range
-                min_y = float('inf')
-                max_y = float('-inf')
-                for layer in self.background_layers:
-                    bg_id = layer.get("background_id", 0)
-                    if bg_id == 0:
-                        continue
-                    bg_img = self.background_images.get(bg_id)
-                    if not bg_img:
-                        continue
-                    layer_y = layer.get("y", 0)
-                    img_height = bg_img.get_height()
-                    min_y = min(min_y, layer_y)
-                    max_y = max(max_y, layer_y + img_height)
-                
-                # Calculate original height range of backgrounds
-                if min_y != float('inf') and max_y != float('-inf'):
-                    original_height = max_y - min_y
-                    if original_height > 0:
-                        # Scale factor to fit original height into bounds height
-                        # This ensures backgrounds fill from top boundary to bottom boundary
-                        scale_factor = bounds_height / original_height
-                        min_bg_y = min_y
-                    else:
-                        # If all backgrounds are at the same Y, use a default scale
-                        scale_factor = 1.0
-                        min_bg_y = min_y if min_y != float('inf') else 0
-        
         for layer in self.background_layers:
             bg_id = layer.get("background_id", 0)
             if bg_id == 0:
@@ -523,90 +487,25 @@ class Map:
             img_width = bg_img.get_width()
             img_height = bg_img.get_height()
             
-            # If global bounds are set, scale all backgrounds uniformly to fit between boundaries
-            # Maintain aspect ratio and relative positions - just scale everything proportionally
-            if has_global_bounds:
-                # Scale the background image maintaining aspect ratio
-                scaled_width = int(img_width * scale_factor)
-                scaled_height = int(img_height * scale_factor)
-                scaled_img = pygame.transform.scale(bg_img, (scaled_width, scaled_height))
-                
-                # Calculate screen positions - scale the Y position proportionally
-                # Original Y position relative to minimum background Y
-                relative_y = y_pos - min_bg_y
-                # Scale the relative position
-                scaled_relative_y = relative_y * scale_factor
-                # Screen Y position relative to top boundary (stays between boundaries)
-                screen_y = int(self.global_bg_start_y + scaled_relative_y - camera_y)
-                
-                # Only draw if within screen bounds AND between boundary lines
-                screen_start_y = self.global_bg_start_y - camera_y
-                screen_end_y = self.global_bg_end_y - camera_y
-                
-                # Ensure backgrounds fill from top boundary to bottom boundary
-                # Clip to boundaries if needed, but always draw to fill the space
-                draw_y = max(screen_y, screen_start_y)
-                draw_bottom = min(screen_y + scaled_height, screen_end_y)
-                draw_height = draw_bottom - draw_y
-                
-                # Only draw if there's visible area
-                if draw_height > 0 and draw_y < screen_end_y:
-                    # Create clipped surface if needed
-                    final_img = scaled_img
-                    if screen_y < screen_start_y or screen_y + scaled_height > screen_end_y:
-                        # Need to clip
-                        clip_top = max(0, screen_start_y - screen_y)
-                        clip_bottom = min(scaled_height, screen_end_y - screen_y)
-                        clip_height = clip_bottom - clip_top
-                        if clip_height > 0:
-                            clipped_surf = pygame.Surface((scaled_width, clip_height))
-                            clipped_surf.blit(scaled_img, (0, -clip_top), (0, clip_top, scaled_width, clip_height))
-                            final_img = clipped_surf
-                        else:
-                            continue  # Skip if no visible area
-                    
-                    # Draw to fill the space - NO VERTICAL TILING, just scale to fit
-                    if repeat:
-                        # Draw repeating background - cover entire horizontal space only
-                        anim_offset = 0
-                        if animated:
-                            # Scale animation offset too
-                            anim_offset = int((self.animation_time * animation_speed) * scale_factor) % scaled_width
-                        
-                        # Calculate start position to ensure full horizontal coverage
-                        base_x = (-scroll_x - anim_offset) % scaled_width
-                        start_x = base_x - scaled_width
-                        end_x = screen_width + scaled_width
-                        
-                        # Draw repeating scaled background - ONE instance per X position, NO vertical tiling
-                        for x in range(start_x, end_x, scaled_width):
-                            surface.blit(final_img, (x, draw_y))
-                    else:
-                        # For non-repeating backgrounds, scale X position too
-                        x_pos = layer.get("x", 0)
-                        screen_x = int(x_pos * scale_factor - scroll_x)
-                        
-                        # Draw ONCE - NO vertical tiling
-                        if screen_x + scaled_width >= 0 and screen_x < screen_width:
-                            surface.blit(final_img, (screen_x, draw_y))
-                continue  # Skip the normal drawing code
-            
-            # Normal drawing (no global bounds or only one bound set)
+            # Normal drawing (no scaling)
             screen_y = y_pos - camera_y
             
             # Clip background vertically if global bounds are set
             clip_top = 0
             clip_bottom = img_height
+            
             if self.global_bg_start_y is not None:
                 # Clip top if background starts above the boundary
                 if y_pos < self.global_bg_start_y:
                     clip_top = self.global_bg_start_y - y_pos
+            
             if self.global_bg_end_y is not None:
                 # Clip bottom if background extends below the boundary
                 if y_pos + img_height > self.global_bg_end_y:
                     clip_bottom = self.global_bg_end_y - y_pos
             
             # Only draw if layer is visible on screen vertically and within bounds
+            # Also check if the clipped portion is valid (clip_bottom > clip_top)
             if screen_y + clip_bottom >= 0 and screen_y + clip_top < screen_height and clip_bottom > clip_top:
                 if repeat:
                     # Draw repeating background - cover entire horizontal space
@@ -625,9 +524,11 @@ class Map:
                     for x in range(start_x, end_x, img_width):
                         if clip_top > 0 or clip_bottom < img_height:
                             # Create a clipped surface
-                            clipped_surf = pygame.Surface((img_width, clip_bottom - clip_top), pygame.SRCALPHA)
-                            clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, clip_bottom - clip_top))
-                            surface.blit(clipped_surf, (x, screen_y + clip_top))
+                            visible_height = clip_bottom - clip_top
+                            if visible_height > 0:
+                                clipped_surf = pygame.Surface((img_width, visible_height), pygame.SRCALPHA)
+                                clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, visible_height))
+                                surface.blit(clipped_surf, (x, screen_y + clip_top))
                         else:
                             surface.blit(bg_img, (x, screen_y))
                 else:
@@ -638,9 +539,11 @@ class Map:
                     if screen_x + img_width >= 0 and screen_x < screen_width:
                         if clip_top > 0 or clip_bottom < img_height:
                             # Create a clipped surface
-                            clipped_surf = pygame.Surface((img_width, clip_bottom - clip_top), pygame.SRCALPHA)
-                            clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, clip_bottom - clip_top))
-                            surface.blit(clipped_surf, (screen_x, screen_y + clip_top))
+                            visible_height = clip_bottom - clip_top
+                            if visible_height > 0:
+                                clipped_surf = pygame.Surface((img_width, visible_height), pygame.SRCALPHA)
+                                clipped_surf.blit(bg_img, (0, -clip_top), (0, clip_top, img_width, visible_height))
+                                surface.blit(clipped_surf, (screen_x, screen_y + clip_top))
                         else:
                             surface.blit(bg_img, (screen_x, screen_y))
 
