@@ -369,9 +369,12 @@ class Map:
     def set_mobs(self, mobs_list):
         """Spawn the mobs on map."""
         map_bounds = self.get_map_bounds()
-        for mob in mobs_list:
-            print(f"[Map] Spawning mob -> name={mob.get('mob_name')} x={mob.get('x')} y={mob.get('y')} health={mob.get('health')}")
-            self.mobs.add(Mob(self.screen, self.players, self.tiles, self.slope_tiles, lines=self.lines, map_bounds=map_bounds, **mob))
+        for i, mob in enumerate(mobs_list):
+            # Generate deterministic ID based on map_id and index
+            # This ensures all clients have the same IDs for the same mobs
+            mob_id = f"map{self.map_id}_mob{i}"
+            print(f"[Map] Spawning mob -> name={mob.get('mob_name')} x={mob.get('x')} y={mob.get('y')} health={mob.get('health')} id={mob_id}")
+            self.mobs.add(Mob(self.screen, self.players, self.tiles, self.slope_tiles, lines=self.lines, map_bounds=map_bounds, mob_id=mob_id, **mob))
 
     def get_mobs(self):
         """Returns mobs list."""

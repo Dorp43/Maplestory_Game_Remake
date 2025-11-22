@@ -7,7 +7,7 @@ from entities.HealthBar import HealthBar
 
 
 class Player(pygame.sprite.Sprite):
-    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs, tiles, slope_tiles=None, lines=None, map_bounds=None):
+    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs=None, tiles=None, slope_tiles=None, lines=None, map_bounds=None):
         pygame.sprite.Sprite.__init__(self)
         self.alive = True
         self.screen = screen
@@ -18,9 +18,9 @@ class Player(pygame.sprite.Sprite):
         self.vel_x = 0
         self.max_health = health
         self.health = health
-        self.mobs = mobs
+        self.mobs = mobs or pygame.sprite.Group()
         # list of pygame.Rect for solid tiles / platforms
-        self.tiles = tiles
+        self.tiles = tiles or []
         self.slope_tiles = slope_tiles or []
         self.lines = lines or []
         self.current_floor = None
@@ -60,9 +60,15 @@ class Player(pygame.sprite.Sprite):
             #reset temporary list of images
             temp_list = []
             #count number of files in the folder
-            num_of_frames = len(os.listdir(f'sprites/{self.char_type}/Thief/{animation}'))
+            #count number of files in the folder
+            path = f'sprites/player/{self.char_type}/{animation}'
+            if not os.path.exists(path):
+                print(f"Warning: Animation path not found: {path}")
+                continue
+                
+            num_of_frames = len(os.listdir(path))
             for i in range(num_of_frames):
-                img = pygame.image.load(f'sprites/{self.char_type}/Thief/{animation}/{i}.png').convert_alpha()
+                img = pygame.image.load(f'{path}/{i}.png').convert_alpha()
                 img = pygame.transform.scale(img, (int(img.get_width() * scale), int(img.get_height() * scale)))
                 temp_list.append(img)
             self.animation_list.append(temp_list)
@@ -341,7 +347,7 @@ class Player(pygame.sprite.Sprite):
 
 
     def shoot(self, projectile, isRotate, damage, hit_count):
-        projectile_img = Projectile(self.rect.centerx + (0.6 * self.rect.size[0] * self.direction), self.rect.centery, self.direction, 300, isRotate, projectile, damage, hit_count)
+        projectile_img = Projectile(self.rect.centerx + (0.6 * self.rect.size[0] * self.direction), self.rect.centery, self.direction, 15, isRotate, projectile, damage, hit_count)
         self.projectiles_group.add(projectile_img)
         self.play_sound("player", "attack")
 
@@ -416,6 +422,14 @@ class Player(pygame.sprite.Sprite):
                 self.attack = False
                 self.next_attack = random.randint(3, 5) # To get a random attack (1-3)
                 self.action = self.next_attack
+        
+        # Return a default cooldown or the current one?
+        # The caller assigns this to animation_cooldown.
+        # We should probably return a reasonable value, e.g. 150 or keep existing logic.
+        # Looking at update_animation, it sets animation_cooldown based on action.
+        # If we return something here, it overrides it for the NEXT frame wait.
+        # Let's return 150 as a safe default for attack frames.
+        return 150
 
 
             
@@ -431,9 +445,12 @@ class Player(pygame.sprite.Sprite):
     def hit(self, damage):
         if self.hit_cooldown <= 0:
             self.is_hit = True
-            # self.update_action(7)
             self.health -= damage
             print(f"Player health: {self.health}")
+            # Record damage event for networking
+            if not hasattr(self, 'pending_damage'):
+                self.pending_damage = []
+            self.pending_damage.append(damage)
             
     
     def check_alive(self):
@@ -472,3 +489,69 @@ class Player(pygame.sprite.Sprite):
  
 
 
+    def draw_remote_projectiles(self, screen, camera_x, camera_y):
+        # Draw projectiles
+        if hasattr(self, 'remote_projectiles'):
+            if not hasattr(self, 'projectile_cache'):
+                self.projectile_cache = {}
+                
+            for p_data in self.remote_projectiles:
+                p_name = p_data['image_name']
+                
+                # Load image if not cached
+                if p_name not in self.projectile_cache:
+                    try:
+                        # Projectiles are stored in sprites/projectiles/{name}/0.png
+                        img = pygame.image.load(f'sprites/projectiles/{p_name}/0.png').convert_alpha()
+                        self.projectile_cache[p_name] = img
+                    except Exception as e:
+                        print(f"Error loading projectile {p_name}: {e}")
+                        continue
+                
+                img = self.projectile_cache[p_name]
+                
+                # Rotate if needed
+                if p_data.get('angle', 0) != 0:
+                    img = pygame.transform.rotate(img, p_data['angle'])
+                elif p_data.get('direction', 1) == -1:
+                    img = pygame.transform.flip(img, True, False)
+                    
+                screen_x = p_data['x'] - camera_x
+                screen_y = p_data['y'] - camera_y
+                screen.blit(img, (screen_x, screen_y))
+
+        # Draw skills
+        if hasattr(self, 'remote_skills'):
+            if not hasattr(self, 'skill_cache'):
+                self.skill_cache = {} # format: {skill_name: [img0, img1, ...]}
+                
+            for s_data in self.remote_skills:
+                s_name = s_data['skill_name']
+                frame_idx = s_data.get('frame_index', 0)
+                
+                # Load animation frames if not cached
+                if s_name not in self.skill_cache:
+                    try:
+                        self.skill_cache[s_name] = []
+                        path = f'sprites/skills/{s_name}'
+                        if os.path.exists(path):
+                            num_frames = len([f for f in os.listdir(path) if f.endswith('.png')])
+                            for i in range(num_frames):
+                                img = pygame.image.load(f'{path}/{i}.png').convert_alpha()
+                                self.skill_cache[s_name].append(img)
+                    except Exception as e:
+                        print(f"Error loading skill {s_name}: {e}")
+                        continue
+                
+                # Draw current frame
+                if s_name in self.skill_cache and self.skill_cache[s_name]:
+                    frames = self.skill_cache[s_name]
+                    # Wrap index if out of bounds (just in case)
+                    img = frames[frame_idx % len(frames)]
+                    
+                    if s_data.get('direction', 1) == 1:
+                        img = pygame.transform.flip(img, True, False)
+                        
+                    screen_x = s_data['x'] - camera_x
+                    screen_y = s_data['y'] - camera_y
+                    screen.blit(img, (screen_x, screen_y))

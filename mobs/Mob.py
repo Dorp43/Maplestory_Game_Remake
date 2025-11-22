@@ -1,17 +1,19 @@
 import pygame
 import os
 import random
+import uuid
 from entities.HealthBar import HealthBar
 
 FLOOR = 465
 
 
 class Mob(pygame.sprite.Sprite):
-    def __init__(self, screen, players, tiles, slope_tiles=None, lines=None, mob_name=None, x=0, y=0, scale=1, speed=1, health=150, map_bounds=None):
+    def __init__(self, screen, players, tiles, slope_tiles=None, lines=None, mob_name=None, x=0, y=0, scale=1, speed=1, health=150, map_bounds=None, mob_id=None):
         pygame.sprite.Sprite.__init__(self)
         self.screen = screen
         self.alive = True
         self.mob_name = mob_name
+        self.id = mob_id if mob_id else str(uuid.uuid4())
         self.speed = speed
         self.players = players
         # list of pygame.Rect for solid tiles / platforms
@@ -91,6 +93,13 @@ class Mob(pygame.sprite.Sprite):
         self.update_animation()
         self.check_alive()
         self.handle_movement()
+
+    def client_update(self, camera_x=0, camera_y=0):
+        """Update method for clients (non-host). Updates visuals but not physics."""
+        self.health_bar.update(camera_x, camera_y)
+        self.update_animation()
+        self.check_alive()
+        # Do NOT call handle_movement()
     
     def handle_movement(self):
         if self.alive and not self.is_hit and not self.has_attacker:
@@ -144,6 +153,8 @@ class Mob(pygame.sprite.Sprite):
 
 
     def follow_player(self, player):
+        if not player:
+            return
         self.attack()
         self.randomMovement = False
         #If player in the right
@@ -477,9 +488,10 @@ class Mob(pygame.sprite.Sprite):
 
 
     def hit(self, damage, player):
-        self.has_attacker = True
         self.health -= damage
-        self.attacker = player
+        if player:
+            self.has_attacker = True
+            self.attacker = player
         self.play_sound("mob","hit")
         self.update_action(3)
 

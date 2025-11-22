@@ -1,22 +1,25 @@
+
 import pygame
 
 class Projectile(pygame.sprite.Sprite):
-    def __init__(self, x, y, direction, range, isRotate, projectile, damage, hit_count):
+    def __init__(self, x, y, direction, speed, isRotate, projectile_name, damage, hit_count):
         pygame.sprite.Sprite.__init__(self)
         if direction == 1:
             self.flip = True
         else:
             self.flip = False
-        self.original_image = pygame.image.load(f'sprites/projectiles/{projectile}/0.png').convert_alpha()
+        self.projectile_name = projectile_name
+        self.original_image = pygame.image.load(f'sprites/projectiles/{self.projectile_name}/0.png').convert_alpha()
         self.image = self.original_image  # This will reference our rotated image.
         self.image = pygame.transform.flip(self.image, self.flip, False)
         self.rect = self.image.get_rect()
+        self.rect = self.image.get_rect()
         self.rect.center = (x,y)
-        if isRotate:
-            self.angle = 0
-        self.range = range
-        self.projectile = projectile
-        self.speed = 12
+        self.angle = 0 # Always initialize angle
+        
+        self.range = 300 # Default range if not passed
+        # self.projectile = projectile # Removed as it was undefined and unused
+        self.speed = speed
         self.hit_count = 0
         self.damage = damage
         self.isRotate = isRotate
@@ -26,7 +29,7 @@ class Projectile(pygame.sprite.Sprite):
 
         
 
-    def update(self, mobs, player):
+    def update(self, mobs, player, hit_list=None):
         #move projectile
         self.rect.x += (self.direction * self.speed)
         if self.isRotate:
@@ -36,10 +39,13 @@ class Projectile(pygame.sprite.Sprite):
                 if mob.alive and mob not in self.mobs_hitted and len(self.mobs_hitted) != self.hit_count:
                     self.mobs_hitted.add(mob)
                     mob.hit(25, player)
+                    if hit_list is not None:
+                        hit_list.append((mob.id, 25))
                     if self.hit_count == 1:
                         self.kill()
         #check if projectile has gone off range
         if self.rect.x > (player.rect.x + self.range) or self.rect.x < (player.rect.x - self.range):
+            # print("DEBUG: Projectile killed due to range")
             self.kill()
 
     def rotate(self):
