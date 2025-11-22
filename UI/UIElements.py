@@ -12,7 +12,7 @@ class UIElement:
         pass
 
 class Button(UIElement):
-    def __init__(self, x, y, width, height, text, font, action=None, bg_color=(255, 165, 0), hover_color=(255, 200, 0), text_color=(255, 255, 255)):
+    def __init__(self, x, y, width, height, text, font, action=None, bg_color=(255, 165, 0), hover_color=(255, 200, 0), text_color=(255, 255, 255), border_color=(200, 100, 0)):
         super().__init__(x, y, width, height)
         self.text = text
         self.font = font
@@ -20,27 +20,10 @@ class Button(UIElement):
         self.bg_color = bg_color
         self.hover_color = hover_color
         self.text_color = text_color
+        self.border_color = border_color
         self.is_hovered = False
 
     def update(self, events):
-        mouse_pos = pygame.mouse.get_pos()
-        # Adjust mouse pos if needed (assuming global scaling is handled elsewhere or passed in)
-        # For now, we assume standard coordinates or that the caller handles scaling logic if needed.
-        # However, Game.py scales the screen. We might need to handle that.
-        # But let's assume the menu will be drawn on the virtual screen and mouse input needs to be scaled.
-        # The Game class handles scaling mouse input. We'll assume the events passed here or mouse.get_pos
-        # needs to be compatible.
-        
-        # Actually, standard pygame.mouse.get_pos() returns window coordinates. 
-        # If we are drawing to a virtual surface, we need to know the scale.
-        # For simplicity, let's assume the Menu passes the *virtual* mouse position or we handle it.
-        # But `pygame.mouse.get_pos()` is global. 
-        # Let's add a `mouse_pos` argument to update, or rely on the caller to set it.
-        # For now, let's use `pygame.mouse.get_pos()` and assume 1:1 for the menu or fix it in the Game loop.
-        
-        # Wait, Game.py does:
-        # virtual_mouse_x = int(mouse_x * (self.VIRTUAL_WIDTH / self.display_width))
-        # So the Game class should pass the virtual mouse position to the UI.
         pass
 
     def update_with_mouse(self, virtual_mouse_pos, events):
@@ -53,11 +36,21 @@ class Button(UIElement):
 
     def draw(self, screen):
         color = self.hover_color if self.is_hovered else self.bg_color
-        pygame.draw.rect(screen, color, self.rect, border_radius=10)
-        pygame.draw.rect(screen, (200, 100, 0), self.rect, width=2, border_radius=10) # Border
+        # Draw shadow
+        shadow_rect = self.rect.copy()
+        shadow_rect.y += 4
+        pygame.draw.rect(screen, (50, 50, 50, 100), shadow_rect, border_radius=10)
         
+        # Draw button body
+        pygame.draw.rect(screen, color, self.rect, border_radius=10)
+        pygame.draw.rect(screen, self.border_color, self.rect, width=3, border_radius=10) # Border
+        
+        # Draw text with shadow
         text_surf = self.font.render(self.text, True, self.text_color)
+        text_shadow = self.font.render(self.text, True, (0, 0, 0))
+        
         text_rect = text_surf.get_rect(center=self.rect.center)
+        screen.blit(text_shadow, (text_rect.x + 2, text_rect.y + 2))
         screen.blit(text_surf, text_rect)
 
 class TextInput(UIElement):

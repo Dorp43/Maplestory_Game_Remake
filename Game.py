@@ -26,6 +26,7 @@ class Game:
         self.map_id = map_id
         self.map = None
         self.players = pygame.sprite.Group()
+        self.all_players = pygame.sprite.Group() # Group containing local AND remote players for Mob AI
         self.remote_players = {} # id -> Player
         self.player_id = str(uuid.uuid4())
         self.username = ""
@@ -343,6 +344,8 @@ class Game:
                             'char_type': player.char_type,
                             'hp': player.health,
                             'max_hp': player.max_health,
+                            'is_hit': player.is_hit,
+                            'hit_cooldown': player.hit_cooldown,
                             'projectiles': projectiles_data,
                             'skills': skills_data
                         }
@@ -408,6 +411,8 @@ class Game:
                                     remote_p.frame_index = p_data['frame_index']
                                     remote_p.flip = p_data['flip']
                                     remote_p.health = p_data['hp']
+                                    remote_p.is_hit = p_data.get('is_hit', False)
+                                    remote_p.hit_cooldown = p_data.get('hit_cooldown', 0)
                                     # Update animation manually
                                     remote_p.image = remote_p.animation_list[remote_p.action][remote_p.frame_index]
                                     
@@ -431,10 +436,13 @@ class Game:
                                     new_p.remote_projectiles = []
                                     new_p.remote_skills = []
                                     self.remote_players[pid] = new_p
+                                    self.all_players.add(new_p) # Add to all_players for Mob AI
                                     
                             # Remove disconnected players
                             disconnected_ids = set(self.remote_players.keys()) - current_remote_ids
                             for pid in disconnected_ids:
+                                if pid in self.remote_players:
+                                    self.all_players.remove(self.remote_players[pid]) # Remove from all_players
                                 del self.remote_players[pid]
                                 
                             # Draw remote players and their skills
@@ -543,21 +551,9 @@ class Game:
         # Get spawn point from map
         spawn_x, spawn_y = self.map.get_spawn_point()
         # Spawn Player (Would move to Map class on next update)
-        player = Player(
-            self.screen,
-            'player',
-            spawn_x,
-            spawn_y,
-            1,
-            3,
-            200,
-            self.mobs,
-            self.map.tiles,
-            self.map.slope_tiles,
-            lines=self.map.lines,
-            map_bounds=map_bounds,
-        )
+        player = Player(self.screen, "Thief", spawn_x, spawn_y, 1, 3, 150, self.mobs, self.map.tiles, self.map.slope_tiles, self.map.lines, map_bounds)
         self.players.add(player)
+        self.all_players.add(player)
         # Initialize camera to player's starting position
         self.camera_x = player.rect.centerx - self.VIRTUAL_WIDTH // 2
         self.camera_y = player.rect.centery - self.VIRTUAL_HEIGHT // 2

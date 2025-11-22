@@ -23,12 +23,15 @@ class MultiplayerMenu:
         center_x = self.width // 2
         start_y = self.height // 3
         
+        # Panel background (handled in draw)
+        
         # Labels and Inputs
-        self.ui_elements.append(Label(center_x - 150, start_y, "Username:", self.font))
+        # White text for labels on dark panel
+        self.ui_elements.append(Label(center_x - 150, start_y, "Username:", self.font, color=(255, 255, 255)))
         self.username_input = TextInput(center_x - 150, start_y + 30, 300, 40, self.font, placeholder="Enter Username", text=self.default_username)
         self.ui_elements.append(self.username_input)
         
-        self.ui_elements.append(Label(center_x - 150, start_y + 90, "Server IP:", self.font))
+        self.ui_elements.append(Label(center_x - 150, start_y + 90, "Server IP:", self.font, color=(255, 255, 255)))
         self.ip_input = TextInput(center_x - 150, start_y + 120, 300, 40, self.font, placeholder="Enter Server IP", text=self.default_ip)
         self.ui_elements.append(self.ip_input)
         
@@ -37,8 +40,8 @@ class MultiplayerMenu:
         btn_height = 50
         spacing = 20
         
-        self.ui_elements.append(Button(center_x - btn_width - spacing // 2, start_y + 200, btn_width, btn_height, "Back", self.font, action=self.on_back, bg_color=(200, 50, 50), hover_color=(230, 70, 70)))
-        self.ui_elements.append(Button(center_x + spacing // 2, start_y + 200, btn_width, btn_height, "Connect", self.font, action=self.handle_connect, bg_color=(50, 200, 50), hover_color=(70, 230, 70)))
+        self.ui_elements.append(Button(center_x - btn_width - spacing // 2, start_y + 200, btn_width, btn_height, "Back", self.font, action=self.on_back, bg_color=(200, 50, 50), hover_color=(230, 70, 70), border_color=(150, 30, 30)))
+        self.ui_elements.append(Button(center_x + spacing // 2, start_y + 200, btn_width, btn_height, "Connect", self.font, action=self.handle_connect, bg_color=(50, 200, 50), hover_color=(70, 230, 70), border_color=(30, 150, 30)))
 
     def handle_connect(self):
         username = self.username_input.text
@@ -53,10 +56,27 @@ class MultiplayerMenu:
                 element.update_with_mouse(virtual_mouse_pos, events)
 
     def draw(self, screen):
-        screen.fill((230, 240, 255))
+        # Draw background
+        try:
+            bg_img = pygame.image.load('sprites/backgrounds/menu_bg.png').convert()
+            bg_img = pygame.transform.scale(bg_img, (self.width, self.height))
+            screen.blit(bg_img, (0, 0))
+        except Exception as e:
+            screen.fill((230, 240, 255))
         
-        title_surf = self.title_font.render("Multiplayer Connection", True, (0, 0, 0))
+        # Draw Semi-transparent Panel
+        panel_rect = pygame.Rect(self.width // 2 - 200, self.height // 3 - 50, 400, 350)
+        panel_surf = pygame.Surface((panel_rect.width, panel_rect.height), pygame.SRCALPHA)
+        panel_surf.fill((0, 0, 0, 150)) # Black with alpha
+        screen.blit(panel_surf, panel_rect)
+        pygame.draw.rect(screen, (200, 200, 200), panel_rect, width=2) # Border
+        
+        title_text = "Multiplayer Connection"
+        title_shadow = self.title_font.render(title_text, True, (0, 0, 0))
+        title_surf = self.title_font.render(title_text, True, (255, 255, 255))
+        
         title_rect = title_surf.get_rect(center=(self.width // 2, self.height // 6))
+        screen.blit(title_shadow, (title_rect.x + 3, title_rect.y + 3))
         screen.blit(title_surf, title_rect)
         
         for element in self.ui_elements:

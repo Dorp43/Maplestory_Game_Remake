@@ -60,9 +60,15 @@ class Player(pygame.sprite.Sprite):
             #reset temporary list of images
             temp_list = []
             #count number of files in the folder
-            num_of_frames = len(os.listdir(f'sprites/{self.char_type}/Thief/{animation}'))
+            #count number of files in the folder
+            path = f'sprites/player/{self.char_type}/{animation}'
+            if not os.path.exists(path):
+                print(f"Warning: Animation path not found: {path}")
+                continue
+                
+            num_of_frames = len(os.listdir(path))
             for i in range(num_of_frames):
-                img = pygame.image.load(f'sprites/{self.char_type}/Thief/{animation}/{i}.png').convert_alpha()
+                img = pygame.image.load(f'{path}/{i}.png').convert_alpha()
                 img = pygame.transform.scale(img, (int(img.get_width() * scale), int(img.get_height() * scale)))
                 temp_list.append(img)
             self.animation_list.append(temp_list)
