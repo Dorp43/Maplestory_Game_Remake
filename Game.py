@@ -7,6 +7,8 @@ from screens.MultiplayerMenu import MultiplayerMenu
 from screens.SettingsMenu import SettingsMenu
 from enum import Enum
 from Network import Network
+from Network import Network
+from UI.GameUI import GameUI
 import uuid
 
 class GameState(Enum):
@@ -42,6 +44,7 @@ class Game:
         # Virtual resolution settings
         self.VIRTUAL_WIDTH = 1366
         self.VIRTUAL_HEIGHT = 768
+        self.ui_height = 80 # Height of the bottom UI bar
         
         # Display resolution (actual window size)
         # Load from settings if not provided
@@ -56,6 +59,7 @@ class Game:
         self.camera_x = 0
         self.camera_y = 0
         self.initialize_game()
+        self.game_ui = GameUI(self.screen)
         
         # Initialize Menus
         # Pass saved username/ip to MultiplayerMenu
@@ -180,8 +184,10 @@ class Game:
             return
             
         # Center camera on player (using virtual dimensions)
+        # Center camera on player (using virtual dimensions)
+        # Center vertically in the visible area (above UI)
         target_x = player.rect.centerx - self.VIRTUAL_WIDTH // 2
-        target_y = player.rect.centery - self.VIRTUAL_HEIGHT // 2
+        target_y = player.rect.centery - (self.VIRTUAL_HEIGHT - self.ui_height) // 2
         
         # Get map boundaries
         map_min_x, map_max_x, map_min_y, map_max_y = self.map.get_map_bounds()
@@ -193,7 +199,12 @@ class Game:
         
         # Vertical: only clamp bottom (don't show void below), but allow void above
         # Don't set camera_min_y - allow camera to go above map_min_y to show void at top
-        camera_max_y = map_max_y - self.VIRTUAL_HEIGHT
+        # Adjust for UI height: We want the bottom of the map to be visible ABOVE the UI.
+        # So the effective screen height for the map is VIRTUAL_HEIGHT - ui_height.
+        # We want map_max_y to be at (VIRTUAL_HEIGHT - ui_height).
+        # So camera_y + (VIRTUAL_HEIGHT - ui_height) = map_max_y
+        # camera_y = map_max_y - (VIRTUAL_HEIGHT - ui_height)
+        camera_max_y = map_max_y - (self.VIRTUAL_HEIGHT - self.ui_height)
         
         # If global background bounds are set, clamp camera to them
         if self.map.global_bg_start_y is not None:
@@ -205,10 +216,8 @@ class Game:
             
         if self.map.global_bg_end_y is not None:
             # Ensure camera doesn't go below the bottom background bound
-            # The bottom of the screen should not exceed global_bg_end_y
-            # So camera_y + screen_height <= global_bg_end_y
-            # camera_y <= global_bg_end_y - screen_height
-            camera_max_y = min(camera_max_y, self.map.global_bg_end_y - self.VIRTUAL_HEIGHT)
+            # We allow the background to end at the top of the UI
+            camera_max_y = min(camera_max_y, self.map.global_bg_end_y - (self.VIRTUAL_HEIGHT - self.ui_height))
         
         # Handle case where map is smaller than screen horizontally
         if camera_max_x < camera_min_x:
@@ -466,6 +475,7 @@ class Game:
                                         1, # scale
                                         3, # speed
                                         p_data['max_hp'],
+                                        p_data.get('username', 'Unknown'), # name
                                         None, # mobs
                                         None, # tiles
                                     )
@@ -528,6 +538,22 @@ class Game:
             # virtual_mouse_y = int(mouse_y * (self.VIRTUAL_HEIGHT / self.display_height))
             self.screen.blit(self.cursor, (virtual_mouse_x, virtual_mouse_y))
             self.screen.blit(self.cursor, (virtual_mouse_x, virtual_mouse_y))
+            
+            # Draw UI
+            if self.state == GameState.GAME:
+                # Find local player
+                for player in self.players:
+                    if player.id == self.player_id: # Wait, Player doesn't have id field initialized in init?
+                        # Game.py assigns self.player_id to Game, but Player object?
+                        # In Game.py: self.players.add(player)
+                        # There is only one local player in self.players usually?
+                        # Yes, self.players.add(player) in load_map.
+                        self.game_ui.draw(player)
+                        break
+                # Fallback if loop doesn't find (shouldn't happen if single player)
+                if len(self.players) > 0:
+                     # Assuming the first one is local
+                     pass
 
             # Scale virtual screen to display size and blit
             scaled_screen = pygame.transform.scale(self.screen, (self.display_width, self.display_height))
@@ -558,10 +584,6 @@ class Game:
                     player.attack = True
                 if event.key == pygame.K_q and not player.attack and not player.in_air:
                     player.skill_big_star = True
-                    player.moving_left = False
-                    player.moving_right = False
-                    player.jump = False
-                    player.attack = False
                 if event.key == pygame.K_ESCAPE:
                     self.run = False
                 if event.key == pygame.K_TAB:
@@ -587,7 +609,8 @@ class Game:
         # Get spawn point from map
         spawn_x, spawn_y = self.map.get_spawn_point()
         # Spawn Player (Would move to Map class on next update)
-        player = Player(self.screen, "Thief", spawn_x, spawn_y, 1, 3, 150, self.mobs, self.map.tiles, self.map.slope_tiles, self.map.lines, map_bounds)
+        player = Player(self.screen, "Thief", spawn_x, spawn_y, 1, 3, 150, self.username or "Player", self.mobs, self.map.tiles, self.map.slope_tiles, self.map.lines, map_bounds)
+        player.id = self.player_id
         self.players.add(player)
         self.all_players.add(player)
         # Initialize camera to player's starting position

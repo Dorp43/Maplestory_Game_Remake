@@ -7,10 +7,11 @@ from entities.HealthBar import HealthBar
 
 
 class Player(pygame.sprite.Sprite):
-    def __init__(self, screen, char_type, x, y, scale, speed, health, mobs=None, tiles=None, slope_tiles=None, lines=None, map_bounds=None):
+    def __init__(self, screen, char_type, x, y, scale, speed, health, name="Player", mobs=None, tiles=None, slope_tiles=None, lines=None, map_bounds=None):
         pygame.sprite.Sprite.__init__(self)
         self.alive = True
         self.screen = screen
+        self.name = name
         self.char_type = char_type
         self.speed = speed
         self.direction = -1
@@ -18,6 +19,11 @@ class Player(pygame.sprite.Sprite):
         self.vel_x = 0
         self.max_health = health
         self.health = health
+        self.max_mana = 100
+        self.mana = 100
+        self.level = 1
+        self.exp = 0
+        self.max_exp = 100
         self.mobs = mobs or pygame.sprite.Group()
         # list of pygame.Rect for solid tiles / platforms
         self.tiles = tiles or []
@@ -80,7 +86,7 @@ class Player(pygame.sprite.Sprite):
 
 
     def update(self, camera_x=0, camera_y=0):
-        self.health_bar.update(camera_x, camera_y)
+        # self.health_bar.update(camera_x, camera_y)
         self.update_animation()
         self.handle_cooldown()
         self.check_alive()
@@ -92,11 +98,11 @@ class Player(pygame.sprite.Sprite):
         dy = 0
 
         #assign movement variables if moving left or right
-        if self.moving_left:
+        if self.moving_left and not self.attack and self.action != 6:
             dx = -self.speed
             self.flip = False
             self.direction = -1
-        if self.moving_right:
+        if self.moving_right and not self.attack and self.action != 6:
             dx = self.speed
             self.flip = True
             self.direction = 1
@@ -104,13 +110,16 @@ class Player(pygame.sprite.Sprite):
         
         # Flash jump
         if self.flash_jump and self.in_air:
-            self.handle_skill("flash_jump")
-            self.play_sound("skills", "flash_jump")
-            if self.flash_jump_cooldown == 0:
-                self.flash_jump_cooldown = 70
-                self.vel_y -= 7
-                self.vel_x -= self.direction * -7
-                self.flash_jump = False
+            if self.consume_mana(10): # Consume 10 mana
+                self.handle_skill("flash_jump")
+                self.play_sound("skills", "flash_jump")
+                if self.flash_jump_cooldown == 0:
+                    self.flash_jump_cooldown = 70
+                    self.vel_y -= 7
+                    self.vel_x -= self.direction * -7
+                    self.flash_jump = False
+            else:
+                self.flash_jump = False # Cancel if no mana
         elif not self.flash_jump and not self.in_air:
             self.vel_x = 0
 
@@ -371,14 +380,18 @@ class Player(pygame.sprite.Sprite):
             animation_cooldown = 50
         # case of big star skill
         elif self.action == 6:
-            self.moving_left = False
-            self.moving_right = False
-            self.jump = False
-            self.attack = False
             if not self.skill:
-                self.handle_skill("big_star")
-                self.play_sound("skills","big_star")
-                self.skill = True
+                if self.consume_mana(15): # Consume mana for skill
+                    self.handle_skill("big_star")
+                    self.play_sound("skills","big_star")
+                    self.skill = True
+                else:
+                    # Not enough mana, maybe play a sound or show a message?
+                    # For now just don't do the skill
+                    self.action = 0 # Go back to idle
+                    self.frame_index = 0
+                    self.update_time = pygame.time.get_ticks()
+                    return
             # change to last frame to lower animation cooldown
             if self.frame_index == len(self.animation_list[self.action])-1:
                 animation_cooldown = 100
@@ -432,6 +445,30 @@ class Player(pygame.sprite.Sprite):
         return 150
 
 
+    def gain_exp(self, amount):
+        self.exp += amount
+        if self.exp >= self.max_exp:
+            self.level_up()
+
+    def level_up(self):
+        self.level += 1
+        self.exp = 0 # Reset exp or carry over? Maplestory usually resets or carries over. Let's reset for simplicity or carry over.
+        # Let's carry over simple overflow
+        # self.exp -= self.max_exp # Actually let's just set to 0 for now to avoid loop if multiple levels
+        
+        self.max_exp = int(self.max_exp * 1.2) # Increase max exp
+        self.max_health += 50
+        self.max_mana += 50
+        self.health = self.max_health
+        self.mana = self.max_mana
+        self.play_sound("player", "level_up") # Assuming sound exists or will be ignored if not
+
+    def consume_mana(self, amount):
+        if self.mana >= amount:
+            self.mana -= amount
+            return True
+        return False
+
             
 
     def update_action(self, new_action):
@@ -461,8 +498,13 @@ class Player(pygame.sprite.Sprite):
 
 
     def play_sound(self, dir_name, sound):
-        soundObj = pygame.mixer.Sound(f'sprites/sounds/{dir_name}/{sound}.mp3')
-        soundObj.play()
+        try:
+            soundObj = pygame.mixer.Sound(f'sprites/sounds/{dir_name}/{sound}.mp3')
+            soundObj.play()
+        except FileNotFoundError:
+            print(f"Warning: Sound file not found: sprites/sounds/{dir_name}/{sound}.mp3")
+        except Exception as e:
+            print(f"Error playing sound {sound}: {e}")
         
         
     def handle_cooldown(self):
