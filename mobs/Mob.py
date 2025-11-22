@@ -8,7 +8,7 @@ FLOOR = 465
 
 
 class Mob(pygame.sprite.Sprite):
-    def __init__(self, screen, players, tiles, slope_tiles=None, lines=None, mob_name=None, x=0, y=0, scale=1, speed=1, health=150, map_bounds=None, mob_id=None):
+    def __init__(self, screen, players, tiles, slope_tiles=None, lines=None, mob_name=None, x=0, y=0, scale=1, speed=1, health=150, map_bounds=None, mob_id=None, exp_reward=15):
         pygame.sprite.Sprite.__init__(self)
         self.screen = screen
         self.alive = True
@@ -33,6 +33,7 @@ class Mob(pygame.sprite.Sprite):
         self.GRAVITY = 7.5
         self.vel_x = 0
         self.attacker = ""
+        self.exp_reward = exp_reward
         self.alpha = 255
         # Booleans
         self.is_idle = False
@@ -480,10 +481,13 @@ class Mob(pygame.sprite.Sprite):
 
     
     def check_alive(self):
-        if self.health <= 0:
+        if self.health <= 0 and self.alive:
             self.health = 0
             self.alive = False
             self.update_action(4)
+            # Award EXP to attacker
+            if self.attacker and hasattr(self.attacker, 'gain_exp'):
+                self.attacker.gain_exp(self.exp_reward)
 
 
 
