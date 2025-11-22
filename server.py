@@ -20,10 +20,12 @@ print("Waiting for a connection, Server Started")
 players = {}
 mob_states = {} # id -> {x, y, action, hp, max_hp, ...}
 host_addr = None
+pending_damage_for_players = {} # pid -> [damage]
+pending_mob_hits = [] # [(mob_id, damage)]
 state_lock = threading.Lock()
 
 def threaded_client(conn, addr):
-    global host_addr
+    global host_addr, pending_damage_for_players, pending_mob_hits
     
     with state_lock:
         # First connection becomes host
@@ -59,11 +61,8 @@ def threaded_client(conn, addr):
                         
                 # Handle Mob Hits (From Clients)
                 # We need to store these and send them to the Host
-                # Let's use a global list for pending hits to host
                 if 'mob_hits' in data and data['mob_hits']:
-                    if not hasattr(threaded_client, 'pending_hits'):
-                        threaded_client.pending_hits = []
-                    threaded_client.pending_hits.extend(data['mob_hits'])
+                    pending_mob_hits.extend(data['mob_hits'])
                 
                 # Prepare reply
                 reply = {
@@ -74,11 +73,28 @@ def threaded_client(conn, addr):
                 
                 # If this is the Host, send them the pending hits and clear the list
                 if addr == host_addr:
-                    if hasattr(threaded_client, 'pending_hits') and threaded_client.pending_hits:
-                        reply['remote_hits'] = threaded_client.pending_hits
-                        threaded_client.pending_hits = [] # Clear after sending
+                    if pending_mob_hits:
+                        reply['remote_hits'] = list(pending_mob_hits) # Copy
+                        pending_mob_hits.clear() # Clear after sending
             
-            conn.sendall(pickle.dumps(reply))
+            # If Host, process player hits and store them for the target clients
+            if addr == host_addr and 'player_hits' in data:
+                for pid, dmg in data['player_hits']:
+                    if pid not in pending_damage_for_players:
+                        pending_damage_for_players[pid] = []
+                    pending_damage_for_players[pid].append(dmg)
+            
+            # Check if there are pending hits for THIS client
+            # We need to know the client's PID. It's in players[addr]['id']
+            if addr in players:
+                current_pid = players[addr].get('id')
+                if current_pid and current_pid in pending_damage_for_players:
+                    hits = pending_damage_for_players[current_pid]
+                    if hits:
+                        # Send as list of (pid, dmg) to match client expectation
+                        reply['player_hits'] = [(current_pid, dmg) for dmg in hits]
+                        # Clear delivered hits
+                        del pending_damage_for_players[current_pid]
             
             conn.sendall(pickle.dumps(reply))
         except Exception as e:

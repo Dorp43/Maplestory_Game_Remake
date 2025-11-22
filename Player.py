@@ -445,9 +445,12 @@ class Player(pygame.sprite.Sprite):
     def hit(self, damage):
         if self.hit_cooldown <= 0:
             self.is_hit = True
-            # self.update_action(7)
             self.health -= damage
             print(f"Player health: {self.health}")
+            # Record damage event for networking
+            if not hasattr(self, 'pending_damage'):
+                self.pending_damage = []
+            self.pending_damage.append(damage)
             
     
     def check_alive(self):

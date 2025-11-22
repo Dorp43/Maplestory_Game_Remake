@@ -366,9 +366,34 @@ class Game:
                                     }
                         
                         # Send and receive
+                        
+                        # Collect player hits (Host only)
+                        player_hits = []
+                        if self.is_host:
+                            for p in self.all_players:
+                                if hasattr(p, 'pending_damage') and p.pending_damage:
+                                    # Find ID for this player
+                                    # If it's local player
+                                    if p == player:
+                                        pid = self.player_id
+                                    else:
+                                        # Find remote player ID
+                                        pid = None
+                                        for r_id, r_p in self.remote_players.items():
+                                            if r_p == p:
+                                                pid = r_id
+                                                break
+                                    
+                                    if pid:
+                                        for dmg in p.pending_damage:
+                                            player_hits.append((pid, dmg))
+                                    
+                                    p.pending_damage = [] # Clear
+                        
                         packet = {
                             'player_data': player_data,
-                            'mob_hits': self.frame_hits # Send hits to server
+                            'mob_hits': self.frame_hits, # Send hits to server
+                            'player_hits': player_hits # Host sends who got hit
                         }
                         if self.is_host:
                             packet['mob_updates'] = mob_updates
@@ -387,6 +412,17 @@ class Game:
                                         if mob.id == mob_id and mob.alive:
                                             mob.hit(damage, None) # Apply damage
                                             break
+                            
+                            # Process Player Hits (Client side)
+                            if 'player_hits' in server_reply:
+                                for pid, damage in server_reply['player_hits']:
+                                    if pid == self.player_id:
+                                        # We got hit!
+                                        # Apply damage locally
+                                        # We use a special flag or just call hit() but ensure we don't loop
+                                        # Player.hit() adds to pending_damage, but we are client, so we don't send player_hits.
+                                        # So it's safe to call hit()
+                                        player.hit(damage)
                             
                             # 1. Update Remote Players
                             all_players_data = server_reply.get('players', {})
@@ -544,7 +580,7 @@ class Game:
 
     def load_map(self, map_id: int):
         """ Sets bg variable to the current map """
-        self.map = Map(self.screen, self.players, self.map_id)
+        self.map = Map(self.screen, self.all_players, self.map_id)
         self.mobs = self.map.get_mobs()
         # Get map boundaries to pass to player
         map_bounds = self.map.get_map_bounds()
