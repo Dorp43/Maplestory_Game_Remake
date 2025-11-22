@@ -305,12 +305,12 @@ class Game:
                     if player.alive:
                         if player.attack:
                             player.update_action(player.next_attack)
+                        elif player.skill_big_star:
+                            player.update_action(6)
                         elif player.in_air:
                             player.update_action(2)  # 2: jump
                         elif player.moving_left or player.moving_right:
                             player.update_action(1)  # 1: run
-                        elif player.skill_big_star:
-                            player.update_action(6)
                         else:
                             player.update_action(0)  # 0: idle
                         player.move(self.gravity)

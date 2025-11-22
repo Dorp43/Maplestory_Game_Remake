@@ -389,6 +389,7 @@ class Player(pygame.sprite.Sprite):
                     # Not enough mana, maybe play a sound or show a message?
                     # For now just don't do the skill
                     self.action = 0 # Go back to idle
+                    self.skill_big_star = False # Reset flag so we don't get stuck
                     self.frame_index = 0
                     self.update_time = pygame.time.get_ticks()
                     return
