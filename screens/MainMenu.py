@@ -49,7 +49,7 @@ class MainMenu:
             screen.fill((240, 248, 255)) # Fallback
         
         # Draw Title Shadow
-        title_text = "Maplestory Remake"
+        title_text = "MapleTrinium"
         title_shadow = self.title_font.render(title_text, True, (0, 0, 0))
         title_surf = self.title_font.render(title_text, True, (255, 140, 0))
         

@@ -3,6 +3,7 @@ import os
 import csv
 import pygame
 from mobs.Mob import Mob
+from entities.Portal import Portal
 from maps import map0
 
 TILE_WIDTH = 90
@@ -14,6 +15,7 @@ class Map:
         self.screen = screen
         self.players = players
         self.mobs = pygame.sprite.Group()
+        self.portals = pygame.sprite.Group()
         self.tiles = []
         self.tile_grid = []
         self.slope_tiles = []
@@ -48,6 +50,8 @@ class Map:
         self.load_backgrounds_from_json(map_id)
         # load spawn point
         self.load_spawn_from_json(map_id)
+        # load portals
+        self.load_portals_from_json(map_id)
 
         mobs_from_csv = self.load_mobs_from_csv(map_id)
         if mobs_from_csv:
@@ -300,27 +304,29 @@ class Map:
         return 0, self.screen.get_width(), 0, self.screen.get_height()
 
     def draw(self, surface, camera_x=0, camera_y=0):
-        """Render backgrounds first, then the tile grid onto the provided surface with camera offset."""
+        """Render backgrounds first, then the tile grid, then portals onto the provided surface with camera offset."""
         # Draw background layers (back to front, sorted by layer index)
         self.draw_backgrounds(surface, camera_x, camera_y)
         
         # Draw tiles
-        if not self.tile_grid:
-            return
-        for y, row in enumerate(self.tile_grid):
-            for x, tile_id in enumerate(row):
-                img_data = self.tile_images.get(tile_id)
-                if img_data:
-                    world_x = x * TILE_WIDTH + img_data['grid_ox']
-                    world_y = y * TILE_HEIGHT + img_data['grid_oy']
-                    # Convert world position to screen position
-                    screen_x = world_x - camera_x
-                    screen_y = world_y - camera_y
-                    # Only draw if tile is visible on screen (optional optimization)
-                    img = img_data['img']
-                    if (screen_x + img.get_width() >= 0 and screen_x < surface.get_width() and
-                        screen_y + img.get_height() >= 0 and screen_y < surface.get_height()):
-                        surface.blit(img, (screen_x, screen_y))
+        if self.tile_grid:
+            for y, row in enumerate(self.tile_grid):
+                for x, tile_id in enumerate(row):
+                    img_data = self.tile_images.get(tile_id)
+                    if img_data:
+                        world_x = x * TILE_WIDTH + img_data['grid_ox']
+                        world_y = y * TILE_HEIGHT + img_data['grid_oy']
+                        # Convert world position to screen position
+                        screen_x = world_x - camera_x
+                        screen_y = world_y - camera_y
+                        # Only draw if tile is visible on screen (optional optimization)
+                        img = img_data['img']
+                        if (screen_x + img.get_width() >= 0 and screen_x < surface.get_width() and
+                            screen_y + img.get_height() >= 0 and screen_y < surface.get_height()):
+                            surface.blit(img, (screen_x, screen_y))
+        
+        # Draw portals (above tiles, below player)
+        self.draw_portals(surface, camera_x, camera_y)
 
     def load_mobs_from_csv(self, map_id: int):
         """
@@ -574,3 +580,36 @@ class Map:
     def get_spawn_point(self):
         """Get the spawn point coordinates. Returns (x, y) tuple."""
         return self.spawn_point.get("x", 400), self.spawn_point.get("y", 200)
+    
+    def load_portals_from_json(self, map_id: int):
+        """Load portals from map{id}_portals.json."""
+        self.portals.empty()
+        json_path = os.path.join(
+            os.path.dirname(__file__),
+            f"map{map_id}_portals.json"
+        )
+        
+        if not os.path.exists(json_path):
+            return
+
+        try:
+            with open(json_path, "r") as f:
+                portals_data = json.load(f)
+                for portal_data in portals_data:
+                    x = portal_data.get("x", 0)
+                    y = portal_data.get("y", 0)
+                    target_map_id = portal_data.get("target_map_id", 0)
+                    portal = Portal(x, y, target_map_id, self.project_root)
+                    self.portals.add(portal)
+                print(f"[Map] Loaded {len(portals_data)} portals for map {map_id}")
+        except Exception as e:
+            print(f"[Map] Error loading portals: {e}")
+    
+    def draw_portals(self, surface, camera_x=0, camera_y=0):
+        """Draw all portals with camera offset."""
+        for portal in self.portals:
+            portal.draw(surface, camera_x, camera_y)
+    
+    def get_portals(self):
+        """Get the portals sprite group."""
+        return self.portals

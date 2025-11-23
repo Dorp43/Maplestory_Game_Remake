@@ -58,6 +58,14 @@ class Game:
         # Camera offset (world position of top-left corner of screen)
         self.camera_x = 0
         self.camera_y = 0
+        
+        # Portal transition state
+        self.transitioning = False
+        self.transition_progress = 0.0  # 0.0 to 1.0
+        self.transition_target_map = None
+        self.transition_fade_duration = 0.5  # seconds for fade out/in
+        self.transition_player_pos = None  # Store player position during transition
+        
         self.initialize_game()
         self.game_ui = GameUI(self.screen)
         
@@ -279,6 +287,12 @@ class Game:
                         mob.client_update(self.camera_x, self.camera_y)
                         mob.draw(self.camera_x, self.camera_y)
 
+                # Update and draw portals
+                if self.map:
+                    portals = self.map.get_portals()
+                    for portal in portals:
+                        portal.update(dt)
+
                 for player in self.players:
                     # Update camera to follow player (before updating player so health bar uses correct camera)
                     self.update_camera(player)
@@ -317,6 +331,19 @@ class Game:
 
                     self.handle_controls(player, events)
                     
+                    # Check portal interaction (W key)
+                    if not self.transitioning and self.map:
+                        portals = self.map.get_portals()
+                        for portal in portals:
+                            if portal.check_collision(player.rect):
+                                # Check if W key is pressed
+                                keys = pygame.key.get_pressed()
+                                if keys[pygame.K_w]:
+                                    target_map_id = portal.get_target_map_id()
+                                    print(f"[Game] Using portal to map {target_map_id}")
+                                    self.transition_to_map(target_map_id)
+                                    break
+                    
                     # --- Networking ---
                     if self.network:
                         # Prepare player data to send
@@ -345,6 +372,7 @@ class Game:
                         player_data = {
                             'id': self.player_id,
                             'username': self.username,
+                            'map_id': self.map_id,  # Add current map ID
                             'x': player.rect.x,
                             'y': player.rect.y,
                             'action': player.action,
@@ -440,9 +468,18 @@ class Game:
                             for addr, p_data in all_players_data.items():
                                 if not p_data: continue
                                 pid = p_data.get('id')
+                                player_map_id = p_data.get('map_id', 0)
                                 
                                 # Skip ourselves
                                 if pid == self.player_id:
+                                    continue
+                                
+                                # Skip players on different maps
+                                if player_map_id != self.map_id:
+                                    # Remove from remote_players if they changed maps
+                                    if pid in self.remote_players:
+                                        self.all_players.remove(self.remote_players[pid])
+                                        del self.remote_players[pid]
                                     continue
                                     
                                 current_remote_ids.add(pid)
@@ -555,6 +592,36 @@ class Game:
                      # Assuming the first one is local
                      pass
 
+            # Handle map transition fade effect
+            if self.transitioning:
+                # Update transition progress
+                self.transition_progress += dt / 1000.0 / self.transition_fade_duration
+                
+                if self.transition_progress <= 1.0:
+                    # Fade out phase
+                    alpha = int(255 * self.transition_progress)
+                    fade_surface = pygame.Surface((self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT))
+                    fade_surface.fill((0, 0, 0))
+                    fade_surface.set_alpha(alpha)
+                    self.screen.blit(fade_surface, (0, 0))
+                elif self.transition_progress <= 2.0:
+                    # Fully black - load new map if not already loaded
+                    if self.transition_target_map is not None:
+                        # Load map with preserved player position
+                        self.load_map(self.transition_target_map, preserve_player_pos=self.transition_player_pos)
+                        self.transition_target_map = None
+                        self.transition_player_pos = None
+                    # Fade in phase
+                    alpha = int(255 * (2.0 - self.transition_progress))
+                    fade_surface = pygame.Surface((self.VIRTUAL_WIDTH, self.VIRTUAL_HEIGHT))
+                    fade_surface.fill((0, 0, 0))
+                    fade_surface.set_alpha(alpha)
+                    self.screen.blit(fade_surface, (0, 0))
+                else:
+                    # Transition complete
+                    self.transitioning = False
+                    self.transition_progress = 0.0
+            
             # Scale virtual screen to display size and blit
             scaled_screen = pygame.transform.scale(self.screen, (self.display_width, self.display_height))
             self.display_surface.blit(scaled_screen, (0, 0))
@@ -600,14 +667,29 @@ class Game:
                     player.attack == False
 
 
-    def load_map(self, map_id: int):
+    def load_map(self, map_id: int, preserve_player_pos=None):
         """ Sets bg variable to the current map """
+        # Clear old player instances to prevent ghost players on previous map
+        self.players.empty()
+        # Note: Don't clear all_players yet as it contains remote players
+        # Remove only local player from all_players
+        for player in list(self.all_players):
+            if hasattr(player, 'id') and player.id == self.player_id:
+                self.all_players.remove(player)
+        
         self.map = Map(self.screen, self.all_players, self.map_id)
         self.mobs = self.map.get_mobs()
         # Get map boundaries to pass to player
         map_bounds = self.map.get_map_bounds()
-        # Get spawn point from map
-        spawn_x, spawn_y = self.map.get_spawn_point()
+        
+        # Determine player spawn position
+        if preserve_player_pos is not None:
+            # Use preserved position (from portal transition)
+            spawn_x, spawn_y = preserve_player_pos
+        else:
+            # Use map spawn point (initial spawn or death respawn)
+            spawn_x, spawn_y = self.map.get_spawn_point()
+        
         # Spawn Player (Would move to Map class on next update)
         player = Player(self.screen, "Thief", spawn_x, spawn_y, 1, 3, 150, self.username or "Player", self.mobs, self.map.tiles, self.map.slope_tiles, self.map.lines, map_bounds)
         player.id = self.player_id
@@ -621,6 +703,20 @@ class Game:
         self.screen.fill((255, 255, 255))
         if self.map:
             self.map.draw(self.screen, self.camera_x, self.camera_y)
+    
+    def transition_to_map(self, target_map_id: int):
+        """Start a fade transition to a new map."""
+        if not self.transitioning:
+            # Save current player position before transition
+            for player in self.players:
+                self.transition_player_pos = (player.rect.x, player.rect.y)
+                break
+            
+            self.transitioning = True
+            self.transition_progress = 0.0
+            self.transition_target_map = target_map_id
+            self.map_id = target_map_id
+            print(f"[Game] Starting transition to map {target_map_id} at position {self.transition_player_pos}")
 
 
 if __name__ == "__main__":

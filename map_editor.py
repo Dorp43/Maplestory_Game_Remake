@@ -64,7 +64,8 @@ def get_paths(map_id: int):
     lines_json_path = os.path.join(base_dir, "maps", f"map{map_id}_lines.json")
     backgrounds_json_path = os.path.join(base_dir, "maps", f"map{map_id}_backgrounds.json")
     spawn_json_path = os.path.join(base_dir, "maps", f"map{map_id}_spawn.json")
-    return base_dir, tiles_csv_path, mobs_csv_path, lines_json_path, backgrounds_json_path, spawn_json_path
+    portals_json_path = os.path.join(base_dir, "maps", f"map{map_id}_portals.json")
+    return base_dir, tiles_csv_path, mobs_csv_path, lines_json_path, backgrounds_json_path, spawn_json_path, portals_json_path
 
 
 def discover_mob_types(base_dir: str):
@@ -366,6 +367,29 @@ def save_spawn(json_path: str, spawn):
         print(f"Error saving spawn: {e}")
 
 
+def load_portals(json_path: str):
+    """Load portals from JSON."""
+    if not os.path.exists(json_path):
+        return []
+    try:
+        with open(json_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"Error loading portals: {e}")
+        return []
+
+
+def save_portals(json_path: str, portals):
+    """Save portals to JSON."""
+    try:
+        os.makedirs(os.path.dirname(json_path), exist_ok=True)
+        with open(json_path, "w") as f:
+            json.dump(portals, f, indent=2)
+        print(f"[map_editor] Saved portals to {json_path}")
+    except Exception as e:
+        print(f"Error saving portals: {e}")
+
+
 def get_snapped_point(lines, world_x, world_y, threshold=15):
     """Find a point to snap to within threshold distance."""
     best_pt = None
@@ -408,6 +432,21 @@ def clamp(value, minimum, maximum):
     return max(minimum, min(value, maximum))
 
 
+def load_portal_images(base_dir: str):
+    """Load portal animation frames for preview."""
+    portal_dir = os.path.join(base_dir, "sprites", "entities", "portal")
+    frames = []
+    for i in range(8):
+        frame_path = os.path.join(portal_dir, f"pv_{i}.png")
+        if os.path.exists(frame_path):
+            try:
+                img = pygame.image.load(frame_path).convert_alpha()
+                frames.append(img)
+            except pygame.error as e:
+                print(f"[map_editor] Error loading portal frame {i}: {e}")
+    return frames
+
+
 def calculate_optimal_map_width(bg_layers, bg_images):
     """
     Calculate optimal map width that fits background images perfectly.
@@ -447,7 +486,7 @@ def main():
     else:
         map_id = DEFAULT_MAP_ID
 
-    base_dir, tiles_csv_path, mobs_csv_path, lines_json_path, backgrounds_json_path, spawn_json_path = get_paths(map_id)
+    base_dir, tiles_csv_path, mobs_csv_path, lines_json_path, backgrounds_json_path, spawn_json_path, portals_json_path = get_paths(map_id)
     tile_entries = load_tile_manifest(base_dir)
     mob_types = discover_mob_types(base_dir)
     bg_entries = load_background_manifest(base_dir)
@@ -470,6 +509,7 @@ def main():
     tile_images = load_tile_images(base_dir, tile_entries)
     mob_images = load_mob_images(base_dir, mob_types, TILE_HEIGHT)
     bg_images = load_background_images(base_dir, bg_entries)
+    portal_frames = load_portal_images(base_dir)
 
     # Load grid - it will preserve actual dimensions from CSV
     grid = load_or_create_grid(tiles_csv_path, GRID_COLS, GRID_ROWS)
@@ -477,6 +517,7 @@ def main():
     lines = load_lines(lines_json_path)
     bg_layers, global_bg_start_y, global_bg_end_y = load_backgrounds(backgrounds_json_path)
     spawn_point = load_spawn(spawn_json_path)
+    portals = load_portals(portals_json_path)
     
     # Set default border positions if not set (so they're ready to drag)
     if global_bg_start_y is None:
@@ -489,6 +530,7 @@ def main():
     clock = pygame.time.Clock()
     font = pygame.font.SysFont(None, 20)
     animation_time = 0  # Track time for animations
+    portal_animation_frame = 0  # Current portal animation frame
 
     camera_x = 0
     camera_y = 0
@@ -497,11 +539,12 @@ def main():
     palette_scroll = 0
     selected_tile_id = 0
     selected_bg_id = 0
-    mode = "tiles"  # tiles, mobs, lines, backgrounds, spawn, background_bounds
+    mode = "tiles"  # tiles, mobs, lines, backgrounds, spawn, background_bounds, portals
     current_mob_index = 0
     current_layer_index = 0  # Z-order for backgrounds (lower = behind)
     show_grid_in_bg_bounds = False  # Toggle grid visibility in background_bounds mode
     show_bg_indicators = True  # Toggle background layer indicator lines visibility in background_bounds mode
+    selected_portal_index = None  # Index of selected portal for editing target map ID
     
     # Background dragging state
     dragging_background = None  # Index of background being dragged, or None
@@ -560,6 +603,7 @@ def main():
                     save_lines(lines_json_path, lines)
                     save_backgrounds(backgrounds_json_path, bg_layers, global_bg_start_y, global_bg_end_y)
                     save_spawn(spawn_json_path, spawn_point)
+                    save_portals(portals_json_path, portals)
                 elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
                     if mode == "backgrounds" or mode == "background_bounds":
                         # Get current mouse position to find hovered background
@@ -730,11 +774,13 @@ def main():
                     elif mode == "lines": mode = "backgrounds"
                     elif mode == "backgrounds": mode = "spawn"
                     elif mode == "spawn": mode = "background_bounds"
-                    elif mode == "background_bounds": mode = "tiles"
+                    elif mode == "background_bounds": mode = "portals"
+                    elif mode == "portals": mode = "tiles"
                     else: mode = "tiles"
                     line_start_point = None
                     dragging_border = None
                     dragging_boundary_line = None
+                    selected_portal_index = None  # Reset portal selection when changing modes
                 elif event.key == pygame.K_c and (mode == "backgrounds" or mode == "background_bounds"):
                     # Reset global bounds to defaults (instead of clearing)
                     actual_rows = len(grid) if grid else GRID_ROWS
@@ -814,9 +860,16 @@ def main():
                 elif event.key in (pygame.K_DOWN, pygame.K_s):
                     move_down = True
                 elif event.unicode.isdigit():
-                    idx = int(event.unicode) - 1
-                    if 0 <= idx < len(mob_types):
-                        current_mob_index = idx
+                    if mode == "portals" and selected_portal_index is not None:
+                        # Set target map ID for selected portal
+                        map_id_digit = int(event.unicode)
+                        portals[selected_portal_index]["target_map_id"] = map_id_digit
+                        print(f"[map_editor] Set portal {selected_portal_index} target map to {map_id_digit}")
+                    else:
+                        # Mob selection (existing behavior)
+                        idx = int(event.unicode) - 1
+                        if 0 <= idx < len(mob_types):
+                            current_mob_index = idx
             elif event.type == pygame.KEYUP:
                 if event.key == pygame.K_LEFT:
                     move_left = False
@@ -1091,6 +1144,50 @@ def main():
                         elif mode == "spawn":
                             if event.button == 1:  # Left click - set spawn point
                                 spawn_point = {"x": world_x, "y": world_y}
+                        elif mode == "portals":
+                            if event.button == 1:  # Left click - place or select portal
+                                # Check if clicking near existing portal
+                                closest_idx = None
+                                closest_dist = 30 ** 2
+                                for i, portal in enumerate(portals):
+                                    px = portal.get("x", 0)
+                                    py = portal.get("y", 0)
+                                    dx = px - world_x
+                                    dy = py - world_y
+                                    dist = dx * dx + dy * dy
+                                    if dist <= closest_dist:
+                                        closest_dist = dist
+                                        closest_idx = i
+                                
+                                if closest_idx is not None:
+                                    # Select existing portal
+                                    selected_portal_index = closest_idx
+                                    print(f"[map_editor] Selected portal {closest_idx}, target map: {portals[closest_idx].get('target_map_id', 0)}")
+                                else:
+                                    # Place new portal
+                                    portals.append({"x": world_x, "y": world_y, "target_map_id": 0})
+                                    selected_portal_index = len(portals) - 1
+                                    print(f"[map_editor] Placed portal at ({world_x}, {world_y})")
+                            elif event.button == 3:  # Right click - delete portal
+                                closest_idx = None
+                                closest_dist = 30 ** 2
+                                for i, portal in enumerate(portals):
+                                    px = portal.get("x", 0)
+                                    py = portal.get("y", 0)
+                                    dx = px - world_x
+                                    dy = py - world_y
+                                    dist = dx * dx + dy * dy
+                                    if dist <= closest_dist:
+                                        closest_dist = dist
+                                        closest_idx = i
+                                
+                                if closest_idx is not None:
+                                    deleted_portal = portals.pop(closest_idx)
+                                    if selected_portal_index == closest_idx:
+                                        selected_portal_index = None
+                                    elif selected_portal_index is not None and selected_portal_index > closest_idx:
+                                        selected_portal_index -= 1
+                                    print(f"[map_editor] Deleted portal at ({deleted_portal.get('x', 0)}, {deleted_portal.get('y', 0)})")
             elif event.type == pygame.MOUSEBUTTONUP:
                 if event.button == 1:
                     dragging_border = None
@@ -1708,6 +1805,41 @@ def main():
                     label_text = font.render("SPAWN", True, spawn_color)
                     screen.blit(label_text, (int(spawn_screen_x) - label_text.get_width() // 2, int(spawn_screen_y) - 30))
 
+        # Draw portals - skip in background_bounds mode
+        if mode != "background_bounds" and portal_frames:
+            # Update portal animation frame
+            portal_animation_frame = int((animation_time * 10) % len(portal_frames))  # 10 FPS
+            
+            for i, portal in enumerate(portals):
+                px = portal.get("x", 0)
+                py = portal.get("y", 0)
+                target_map = portal.get("target_map_id", 0)
+                
+                portal_screen_x = px - camera_x
+                portal_screen_y = py - camera_y
+                
+                # Only draw if visible
+                if -100 < portal_screen_x < viewport_width + 100 and -100 < portal_screen_y < WINDOW_HEIGHT + 100:
+                    # Draw portal animation frame
+                    portal_img = portal_frames[portal_animation_frame]
+                    screen.blit(portal_img, (int(portal_screen_x), int(portal_screen_y)))
+                    
+                    # Draw selection indicator if this portal is selected
+                    if mode == "portals" and i == selected_portal_index:
+                        # Draw yellow outline around selected portal
+                        portal_rect = portal_img.get_rect()
+                        portal_rect.x = int(portal_screen_x)
+                        portal_rect.y = int(portal_screen_y)
+                        pygame.draw.rect(screen, (255, 255, 0), portal_rect, 3)
+                    
+                    # Draw target map ID label
+                    if mode == "portals":
+                        label_color = (255, 255, 0) if i == selected_portal_index else (200, 200, 200)
+                        label_text = font.render(f"Map {target_map}", True, label_color)
+                        label_x = int(portal_screen_x) + portal_img.get_width() // 2 - label_text.get_width() // 2
+                        label_y = int(portal_screen_y) - 20
+                        screen.blit(label_text, (label_x, label_y))
+
         # palette
         pygame.draw.rect(screen, PALETTE_BG, palette_rect)
         y_offset = 10 - palette_scroll
@@ -1760,15 +1892,17 @@ def main():
                 f"Drag boundary lines to adjust them | G = toggle grid ({grid_status}) | H = toggle indicators ({indicators_status}) | C = clear bounds | S = save | ESC/Q = quit",
             ]
         else:
+            portal_info = f"(selected: {selected_portal_index}, target map: {portals[selected_portal_index].get('target_map_id', 0)})" if selected_portal_index is not None and selected_portal_index < len(portals) else "(none selected)"
             info_lines = [
-                f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs/lines/backgrounds/spawn/bounds",
+                f"map{map_id} | mode: {mode} | camera: arrows/WASD | TAB switches tiles/mobs/lines/backgrounds/spawn/bounds/portals",
                 "Tiles: Left click = paint selected tile, Right click = erase, Mousewheel in palette = scroll",
                 f"Mobs: 1..{len(mob_types)} select type (current: {mob_types[current_mob_index]}), Left click = add, Right click = remove",
                 f"Lines: Left click = start/end line (auto-connects), Right click = cancel/delete, T = toggle type ({line_type})",
                 f"Backgrounds: Left click = place, Left click & drag = move (non-repeating), Drag top/bottom lines = set bounds, Right click = delete, R = toggle repeat, A = toggle animation (repeating only), C = clear bounds, +/- = layer index ({current_layer_index}), M = resize map",
                 f"Spawn: Left click = set spawn point (current: {spawn_point['x']}, {spawn_point['y']})",
+                f"Portals: Left click = place/select portal, Right click = delete, 0-9 = set target map ID {portal_info}",
                 "Map Resize: In tiles mode, drag map borders (highlighted in yellow) to resize",
-                "S = save tiles, mobs, lines, backgrounds & spawn, ESC/Q = quit",
+                "S = save tiles, mobs, lines, backgrounds, spawn & portals, ESC/Q = quit",
             ]
         y = 5
         for line in info_lines:
